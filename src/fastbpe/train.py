@@ -1,6 +1,10 @@
-"""Byte-level BPE training. Naive on purpose: all pair counts are recomputed every round."""
+"""Byte-level BPE training with incremental pair-count updates.
 
-from collections import Counter
+Pair counts are kept up to date across rounds, and an inverted index from each pair to
+the words containing it means a merge only rewrites the words it actually touches.
+"""
+
+from collections import defaultdict
 from collections.abc import Sequence
 from itertools import pairwise
 
@@ -10,12 +14,28 @@ Word = tuple[bytes, ...]
 Pair = tuple[bytes, bytes]
 
 
-def _count_pairs(word_counts: Counter[Word]) -> Counter[Pair]:
-    pair_counts: Counter[Pair] = Counter()
-    for word, count in word_counts.items():
+class _PairStats:
+    """Pair frequencies over a set of weighted words, plus which words hold each pair."""
+
+    def __init__(self) -> None:
+        self.counts: dict[Pair, int] = {}
+        self.words: defaultdict[Pair, set[int]] = defaultdict(set)
+
+    def add(self, index: int, word: Word, count: int) -> None:
         for pair in pairwise(word):
-            pair_counts[pair] += count
-    return pair_counts
+            self.counts[pair] = self.counts.get(pair, 0) + count
+            self.words[pair].add(index)
+
+    def remove(self, index: int, word: Word, count: int) -> None:
+        for pair in pairwise(word):
+            self.counts[pair] -= count
+            if self.counts[pair] == 0:
+                del self.counts[pair]
+            holders = self.words.get(pair)
+            if holders is not None:
+                holders.discard(index)
+                if not holders:
+                    del self.words[pair]
 
 
 def _merge_word(word: Word, pair: Pair) -> Word:
@@ -29,13 +49,6 @@ def _merge_word(word: Word, pair: Pair) -> Word:
             merged.append(word[i])
             i += 1
     return tuple(merged)
-
-
-def _apply_merge(word_counts: Counter[Word], pair: Pair) -> Counter[Word]:
-    merged: Counter[Word] = Counter()
-    for word, count in word_counts.items():
-        merged[_merge_word(word, pair)] += count
-    return merged
 
 
 def train_bpe(
@@ -58,21 +71,29 @@ def train_bpe(
 
     specials = set(special_tokens)
     chunks = [c for c in split_on_special_tokens(text, special_tokens) if c not in specials]
-    word_counts: Counter[Word] = Counter()
-    for piece, count in count_pretokens(chunks).items():
-        word_counts[tuple(bytes([b]) for b in piece)] += count
+    piece_counts = count_pretokens(chunks)
+    words: list[Word] = [tuple(bytes([b]) for b in piece) for piece in piece_counts]
+    word_counts = list(piece_counts.values())
+
+    stats = _PairStats()
+    for index, word in enumerate(words):
+        stats.add(index, word, word_counts[index])
 
     merges: list[Pair] = []
-    while len(merges) < n_merges:
-        pair_counts = _count_pairs(word_counts)
-        if not pair_counts:
-            break
-        best = max(pair_counts, key=lambda pair: (pair_counts[pair], pair))
+    merged_pairs: set[Pair] = set()
+    while len(merges) < n_merges and stats.counts:
+        best = max(stats.counts, key=lambda pair: (stats.counts[pair], pair))
         # A pair can come back after being merged when a later merge rebuilds one of its
         # sides from different parts. Merge it again, but it is not a new vocab entry.
-        if best not in merges:
+        if best not in merged_pairs:
+            merged_pairs.add(best)
             merges.append(best)
-        word_counts = _apply_merge(word_counts, best)
+        # Merging every occurrence left to right leaves no `best` pair behind, so its
+        # index entry can go; remove() skips pairs that are no longer indexed.
+        for index in stats.words.pop(best):
+            stats.remove(index, words[index], word_counts[index])
+            words[index] = _merge_word(words[index], best)
+            stats.add(index, words[index], word_counts[index])
 
     vocab = {i: bytes([i]) for i in range(256)}
     for left, right in merges:
