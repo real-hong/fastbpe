@@ -99,6 +99,7 @@ def train_bpe(
 
     ``workers > 1`` pre-tokenizes in that many processes, one batch of text between
     special tokens at a time; text without special tokens cannot be split this way.
+    Workers are spawned, so scripts need an ``if __name__ == "__main__":`` guard.
     """
     if len(set(special_tokens)) != len(special_tokens):
         raise ValueError(f"duplicate special tokens: {list(special_tokens)}")

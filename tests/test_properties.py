@@ -2,7 +2,7 @@ import string
 
 import pytest
 import regex
-from hypothesis import given
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from fastbpe import Tokenizer, train_bpe
@@ -76,6 +76,8 @@ def test_pretokenize_is_lossless(text: str) -> None:
     assert "".join(pretokenize(text)) == text
 
 
+# Every example starts spawned worker processes (~50 ms), so keep the count low.
+@settings(max_examples=20)
 @given(st.lists(st.text(max_size=100), max_size=50))
 def test_parallel_count_matches_serial(texts: list[str]) -> None:
     assert count_pretokens(texts, workers=3) == count_pretokens(texts, workers=1)

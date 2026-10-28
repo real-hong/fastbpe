@@ -1,7 +1,9 @@
 """Pre-tokenization: split text into GPT-2 style pieces and count them."""
 
+import multiprocessing
 import re
 import unicodedata
+import warnings
 from collections import Counter
 from collections.abc import Callable, Iterable
 from concurrent.futures import ProcessPoolExecutor
@@ -122,13 +124,31 @@ def count_pretokens(texts: Iterable[str], *, workers: int = 1) -> Counter[bytes]
     Each text is pre-tokenized whole, so the texts must already be cut where no piece
     can cross, such as at special tokens. Parallelism is only as good as that split:
     a single text runs in a single process.
+
+    Workers are started with "spawn", so a script calling this with ``workers > 1``
+    needs an ``if __name__ == "__main__":`` guard. Inside a daemonic process (e.g. a
+    ``multiprocessing.Pool`` worker), which may not start children, it warns and
+    counts in the current process instead.
     """
     texts = list(texts)
     if workers <= 1:
         return _count(texts)
+    if multiprocessing.current_process().daemon:
+        warnings.warn(
+            "daemonic processes cannot start workers; counting pre-tokens in this process",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return _count(texts)
     # A few batches per worker keeps them all busy when text lengths vary.
+    batches = _batches(texts, workers * 4)
+    if len(batches) == 1:
+        return _count(texts)
+    # Not fork: forking while other threads run can deadlock the child, and fork stops
+    # being the Linux default in Python 3.14. One method everywhere behaves the same.
     total: Counter[bytes] = Counter()
-    with ProcessPoolExecutor(workers) as pool:
-        for counts in pool.map(_count, _batches(texts, workers * 4)):
+    context = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(workers, mp_context=context) as pool:
+        for counts in pool.map(_count, batches):
             total.update(counts)
     return total
