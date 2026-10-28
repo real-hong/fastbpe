@@ -26,3 +26,9 @@
 - src/fastbpe/train.py        增量式合并训练
 - src/fastbpe/encode.py       基于 rank 的编码 + 缓存
 - src/fastbpe/tokenizer.py    公共 API、特殊 token、序列化
+
+## 性能测量
+- cProfile 会严重夸大预分词等细粒度调用的耗时，只用来定位热点；
+  耗时占比和优化前后对比一律用 pytest-benchmark / perf_counter 实测。
+- 基准必须包含对抗性输入：超长无空格串（base64、DNA、压缩 JS）、
+  大量特殊 token、高重复与低重复语料。只在常规语料上验证过的优化不算完成。
