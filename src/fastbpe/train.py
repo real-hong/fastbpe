@@ -1,9 +1,12 @@
 """Byte-level BPE training with incremental pair-count updates.
 
 Pair counts are kept up to date across rounds, and an inverted index from each pair to
-the words containing it means a merge only rewrites the words it actually touches.
+the words containing it means a merge only rewrites the words it actually touches. The
+most frequent pair comes from a max-heap with lazy deletion: changed counts are pushed as
+new entries and outdated entries are skipped when popped.
 """
 
+import heapq
 from collections import defaultdict
 from collections.abc import Sequence
 from itertools import pairwise
@@ -14,21 +17,40 @@ Word = tuple[bytes, ...]
 Pair = tuple[bytes, bytes]
 
 
+class _Candidate:
+    """Heap entry. heapq pops the smallest item, so "less than" means "more frequent,
+    then lexicographically larger pair" -- the order max() used before the heap."""
+
+    __slots__ = ("count", "pair")
+
+    def __init__(self, count: int, pair: Pair) -> None:
+        self.count = count
+        self.pair = pair
+
+    def __lt__(self, other: "_Candidate") -> bool:
+        return (self.count, self.pair) > (other.count, other.pair)
+
+
 class _PairStats:
-    """Pair frequencies over a set of weighted words, plus which words hold each pair."""
+    """Pair frequencies over a set of weighted words, which words hold each pair, and a
+    heap to find the most frequent pair."""
 
     def __init__(self) -> None:
         self.counts: dict[Pair, int] = {}
         self.words: defaultdict[Pair, set[int]] = defaultdict(set)
+        self._heap: list[_Candidate] = []
+        self._changed: set[Pair] = set()
 
     def add(self, index: int, word: Word, count: int) -> None:
         for pair in pairwise(word):
             self.counts[pair] = self.counts.get(pair, 0) + count
             self.words[pair].add(index)
+            self._changed.add(pair)
 
     def remove(self, index: int, word: Word, count: int) -> None:
         for pair in pairwise(word):
             self.counts[pair] -= count
+            self._changed.add(pair)
             if self.counts[pair] == 0:
                 del self.counts[pair]
             holders = self.words.get(pair)
@@ -36,6 +58,19 @@ class _PairStats:
                 holders.discard(index)
                 if not holders:
                     del self.words[pair]
+
+    def pop_best(self) -> Pair | None:
+        """Return the most frequent pair (ties: the larger pair), or None if none is left."""
+        # One entry per pair changed since the last call, rather than one per change.
+        for pair in self._changed:
+            if pair in self.counts:
+                heapq.heappush(self._heap, _Candidate(self.counts[pair], pair))
+        self._changed.clear()
+        while self._heap:
+            top = heapq.heappop(self._heap)
+            if self.counts.get(top.pair) == top.count:
+                return top.pair
+        return None
 
 
 def _merge_word(word: Word, pair: Pair) -> Word:
@@ -81,8 +116,7 @@ def train_bpe(
 
     merges: list[Pair] = []
     merged_pairs: set[Pair] = set()
-    while len(merges) < n_merges and stats.counts:
-        best = max(stats.counts, key=lambda pair: (stats.counts[pair], pair))
+    while len(merges) < n_merges and (best := stats.pop_best()) is not None:
         # A pair can come back after being merged when a later merge rebuilds one of its
         # sides from different parts. Merge it again, but it is not a new vocab entry.
         if best not in merged_pairs:
