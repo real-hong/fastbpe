@@ -1,3 +1,4 @@
+from collections.abc import Set as AbstractSet
 from pathlib import Path
 
 import pytest
@@ -55,6 +56,23 @@ def test_allowed_special_subset(small_corpus: str) -> None:
     ids = tok.encode(f"{EOT}<|pad|>", allowed_special={"<|pad|>"})
     assert tok.special_tokens[EOT] not in ids
     assert ids[-1] == tok.special_tokens["<|pad|>"]
+
+
+@pytest.mark.parametrize("bad", ["none", EOT, "", "ALL", [EOT], (EOT,), None])
+def test_allowed_special_rejects_anything_but_all_or_a_set(
+    small_tokenizer: Tokenizer, bad: object
+) -> None:
+    # As in tiktoken: a string other than "all" is not silently treated as "all".
+    with pytest.raises(TypeError):
+        small_tokenizer.encode(f"hi{EOT}", allowed_special=bad)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("allowed", [frozenset({EOT}), {EOT: 0}.keys()])
+def test_allowed_special_accepts_any_abstract_set(
+    small_tokenizer: Tokenizer, allowed: AbstractSet[str]
+) -> None:
+    eot = small_tokenizer.special_tokens[EOT]
+    assert small_tokenizer.encode(EOT, allowed_special=allowed) == [eot]
 
 
 def test_decode_special_token(small_tokenizer: Tokenizer) -> None:

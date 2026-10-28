@@ -90,10 +90,15 @@ class Tokenizer:
         self, text: str, *, allowed_special: Literal["all"] | AbstractSet[str] = "all"
     ) -> list[int]:
         """Encode ``text``; special tokens outside ``allowed_special`` are plain text."""
-        if isinstance(allowed_special, str):
+        if allowed_special == "all":
             allowed = set(self._special_tokens)
-        else:
+        elif isinstance(allowed_special, AbstractSet):
             allowed = self._special_tokens.keys() & allowed_special
+        else:
+            # Like tiktoken: any other string (or a list) is an error, not "all".
+            raise TypeError(
+                f'allowed_special must be "all" or a set of strings, got {allowed_special!r}'
+            )
 
         ids: list[int] = []
         for chunk in split_on_special_tokens(text, allowed):
