@@ -1,42 +1,48 @@
 """Rank-based BPE encoding of single pre-tokenized pieces."""
 
-from itertools import pairwise
-
-
-def _lowest_rank(parts: list[bytes], ranks: dict[bytes, int]) -> int | None:
-    pair_ranks = [ranks.get(left + right) for left, right in pairwise(parts)]
-    return min((rank for rank in pair_ranks if rank is not None), default=None)
-
-
-def _merge_rank(parts: list[bytes], ranks: dict[bytes, int], rank: int) -> list[bytes]:
-    """Merge, left to right, the adjacent pairs whose concatenation has ``rank``.
-
-    This is the same as merging the leftmost lowest-ranked pair one at a time, as
-    tiktoken does, as long as no merge forms a new neighbouring pair ranked below
-    ``rank``. When one does, stop there so the caller merges that pair next.
-    """
-    merged: list[bytes] = []
-    i = 0
-    while i < len(parts):
-        if i + 1 < len(parts) and ranks.get(parts[i] + parts[i + 1]) == rank:
-            token = parts[i] + parts[i + 1]
-            merged.append(token)
-            i += 2
-            left = ranks.get(merged[-2] + token) if len(merged) > 1 else None
-            right = ranks.get(token + parts[i]) if i < len(parts) else None
-            if any(r is not None and r < rank for r in (left, right)):
-                return merged + parts[i:]
-        else:
-            merged.append(parts[i])
-            i += 1
-    return merged
+import heapq
 
 
 def bpe_parts(piece: bytes, ranks: dict[bytes, int]) -> list[bytes]:
-    """Split ``piece`` into the tokens BPE ends with, merging lowest ranks first."""
-    parts = [bytes([b]) for b in piece]
-    while (rank := _lowest_rank(parts, ranks)) is not None:
-        parts = _merge_rank(parts, ranks, rank)
+    """Split ``piece`` into the tokens BPE ends with, merging lowest ranks first.
+
+    Equal ranks merge leftmost first, as tiktoken does. Runs in O(n log n): tokens form
+    a linked list keyed by their start offset in ``piece``. ``end_of[i]`` is where the
+    token starting at ``i`` ends (-1 once it has been merged into its left neighbour)
+    and ``start_before[i]`` is where the previous token starts. The heap holds candidate
+    merges ``(rank, start, mid, end)`` of ``piece[start:mid]`` with ``piece[mid:end]``;
+    an entry is stale once either of its two tokens has changed.
+    """
+    n = len(piece)
+    end_of = list(range(1, n + 1))
+    start_before = list(range(-1, n - 1))
+    heap: list[tuple[int, int, int, int]] = []
+
+    def push(start: int, mid: int, end: int) -> None:
+        rank = ranks.get(piece[start:end])
+        if rank is not None:
+            heapq.heappush(heap, (rank, start, mid, end))
+
+    for i in range(n - 1):
+        push(i, i + 1, i + 2)
+
+    while heap:
+        _, start, mid, end = heapq.heappop(heap)
+        if end_of[start] != mid or end_of[mid] != end:
+            continue
+        end_of[start] = end
+        end_of[mid] = -1
+        if start > 0:
+            push(start_before[start], start, end)
+        if end < n:
+            start_before[end] = start
+            push(start, end, end_of[end])
+
+    parts = []
+    i = 0
+    while i < n:
+        parts.append(piece[i : end_of[i]])
+        i = end_of[i]
     return parts
 
 

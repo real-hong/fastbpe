@@ -11,6 +11,9 @@ from fastbpe.encode import bpe_parts, encode_bytes
 from fastbpe.pretokenize import pretokenize, split_on_special_tokens
 from fastbpe.train import train_bpe
 
+# Encoded pieces kept per tokenizer; the cache is simply emptied when it fills up.
+CACHE_SIZE = 100_000
+
 
 def _recover_merges(ranks: dict[bytes, int]) -> list[tuple[bytes, bytes]]:
     """Rebuild the merge list behind tiktoken-style ranks.
@@ -50,6 +53,7 @@ class Tokenizer:
         for token_id, token in sorted(self._vocab.items()):
             if token_id not in special_ids:
                 self._ranks.setdefault(token, token_id)
+        self._cache: dict[str, list[int]] = {}
 
     @classmethod
     def from_ranks(cls, ranks: dict[bytes, int], special_tokens: dict[str, int]) -> Self:
@@ -95,7 +99,16 @@ class Tokenizer:
                 ids.append(self._special_tokens[chunk])
                 continue
             for piece in pretokenize(chunk):
-                ids.extend(encode_bytes(piece.encode(), self._ranks))
+                ids.extend(self._encode_piece(piece))
+        return ids
+
+    def _encode_piece(self, piece: str) -> list[int]:
+        ids = self._cache.get(piece)
+        if ids is None:
+            ids = encode_bytes(piece.encode(), self._ranks)
+            if len(self._cache) >= CACHE_SIZE:
+                self._cache.clear()
+            self._cache[piece] = ids
         return ids
 
     def decode(self, ids: Iterable[int]) -> str:
