@@ -46,6 +46,8 @@ strict = true
 [tool.pytest.ini_options]
 addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
 testpaths = ["tests"]
+# tests/naive_bpe.py is the reference trainer for tests and benchmarks.
+pythonpath = ["tests"]
 xfail_strict = true
 markers = [
     "oracle: compares against tiktoken's gpt2 encoding (first run downloads its data)",
