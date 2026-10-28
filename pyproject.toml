@@ -18,5 +18,37 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.170.13",
+    "mypy>=2.4.0",
+    "pytest>=9.2.0",
+    "pytest-benchmark>=5.3.0",
+    "pytest-cov>=7.1.0",
+    "regex>=2026.9.29",
+    "ruff>=0.17.3",
     "tiktoken>=0.14.0",
+    "types-regex>=2026.9.29.20261017",
 ]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "PERF", "RUF", "N", "ANN"]
+# Full-width CJK punctuation is legitimate tokenizer test data.
+allowed-confusables = ["，", "！", "："]
+
+[tool.mypy]
+strict = true
+
+[tool.pytest.ini_options]
+addopts = ["-ra", "--strict-markers", "--strict-config", "--import-mode=importlib"]
+testpaths = ["tests"]
+xfail_strict = true
+markers = [
+    "oracle: compares against tiktoken's gpt2 encoding (first run downloads its data)",
+    "slow: long-running edge-case tests",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["fastbpe"]
