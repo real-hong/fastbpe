@@ -6,7 +6,8 @@ import unicodedata
 import warnings
 from collections import Counter
 from collections.abc import Callable, Iterable
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import Executor, ProcessPoolExecutor
+from multiprocessing.context import BaseContext
 
 # The GPT-2 split pattern as used by tiktoken. It needs the third-party ``regex`` module
 # (``\p{..}`` classes, possessive quantifiers), so it is kept here only as the reference
@@ -118,21 +119,49 @@ def _batches(texts: list[str], n: int) -> list[list[str]]:
     return batches
 
 
-def count_pretokens(texts: Iterable[str], *, workers: int = 1) -> Counter[bytes]:
+def default_mp_context() -> BaseContext:
+    """forkserver where the platform has it, else spawn; never fork.
+
+    Forking a process that has other threads running can deadlock the child.
+    forkserver forks workers from a clean single-threaded server instead, and is cheaper
+    to start than spawn.
+    """
+    if "forkserver" in multiprocessing.get_all_start_methods():
+        return multiprocessing.get_context("forkserver")
+    return multiprocessing.get_context("spawn")
+
+
+def count_pretokens(
+    texts: Iterable[str],
+    *,
+    workers: int = 1,
+    mp_context: BaseContext | None = None,
+    executor: Executor | None = None,
+) -> Counter[bytes]:
     """Count the UTF-8 encoded pieces of every text; ``workers > 1`` counts in parallel.
 
     Each text is pre-tokenized whole, so the texts must already be cut where no piece
     can cross, such as at special tokens. Parallelism is only as good as that split:
     a single text runs in a single process.
 
-    Workers are started with "spawn", so a script calling this with ``workers > 1``
-    needs an ``if __name__ == "__main__":`` guard. Inside a daemonic process (e.g. a
-    ``multiprocessing.Pool`` worker), which may not start children, it warns and
-    counts in the current process instead.
+    Parallel counting is opt-in (``workers=1`` by default). It starts ``workers``
+    processes with ``mp_context`` (default: ``default_mp_context()``), so a script
+    calling it needs an ``if __name__ == "__main__":`` guard. Inside a daemonic process
+    (e.g. a ``multiprocessing.Pool`` worker), which may not start children, it warns and
+    counts in the current process instead. Pass ``executor`` to run the batches on an
+    executor you own (it is left open); ``workers`` then only sets how many batches.
     """
+    if executor is not None and mp_context is not None:
+        raise ValueError("pass either executor or mp_context, not both")
     texts = list(texts)
     if workers <= 1:
         return _count(texts)
+    # A few batches per worker keeps them all busy when text lengths vary.
+    batches = _batches(texts, workers * 4)
+    if len(batches) == 1:
+        return _count(texts)
+    if executor is not None:
+        return _count_batches(executor, batches)
     if multiprocessing.current_process().daemon:
         warnings.warn(
             "daemonic processes cannot start workers; counting pre-tokens in this process",
@@ -140,15 +169,12 @@ def count_pretokens(texts: Iterable[str], *, workers: int = 1) -> Counter[bytes]
             stacklevel=2,
         )
         return _count(texts)
-    # A few batches per worker keeps them all busy when text lengths vary.
-    batches = _batches(texts, workers * 4)
-    if len(batches) == 1:
-        return _count(texts)
-    # Not fork: forking while other threads run can deadlock the child, and fork stops
-    # being the Linux default in Python 3.14. One method everywhere behaves the same.
+    with ProcessPoolExecutor(workers, mp_context=mp_context or default_mp_context()) as pool:
+        return _count_batches(pool, batches)
+
+
+def _count_batches(executor: Executor, batches: list[list[str]]) -> Counter[bytes]:
     total: Counter[bytes] = Counter()
-    context = multiprocessing.get_context("spawn")
-    with ProcessPoolExecutor(workers, mp_context=context) as pool:
-        for counts in pool.map(_count, batches):
-            total.update(counts)
+    for counts in executor.map(_count, batches):
+        total.update(counts)
     return total

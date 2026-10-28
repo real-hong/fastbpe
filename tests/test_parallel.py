@@ -4,16 +4,18 @@ Start methods and daemon processes need a real ``__main__`` and fresh processes,
 these tests run small scripts in a subprocess.
 """
 
+import multiprocessing
 import subprocess
 import sys
 import textwrap
 import threading
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
-from fastbpe.pretokenize import count_pretokens
+from fastbpe.pretokenize import count_pretokens, default_mp_context
 
 START_METHODS = ["spawn", "forkserver"]
 
@@ -49,6 +51,42 @@ def test_parallel_training_under_global_start_method(tmp_path: Path, method: str
         """,
     )
     assert out == "True"
+
+
+@pytest.mark.parametrize("method", START_METHODS)
+def test_parallel_training_with_explicit_mp_context(tmp_path: Path, method: str) -> None:
+    out = run_script(
+        tmp_path,
+        f"""
+        if __name__ == "__main__":
+            serial = train_bpe(TEXT, 300, ["<|e|>"])
+            context = mp.get_context({method!r})
+            print(train_bpe(TEXT, 300, ["<|e|>"], workers=2, mp_context=context) == serial)
+        """,
+    )
+    assert out == "True"
+
+
+def test_default_mp_context_prefers_forkserver() -> None:
+    expected = "forkserver" if "forkserver" in multiprocessing.get_all_start_methods() else "spawn"
+    assert default_mp_context().get_start_method() == expected
+
+
+def test_executor_and_mp_context_are_exclusive() -> None:
+    with ThreadPoolExecutor(2) as executor, pytest.raises(ValueError, match="mp_context"):
+        count_pretokens(
+            ["a b", "c d"],
+            workers=2,
+            executor=executor,
+            mp_context=multiprocessing.get_context("spawn"),
+        )
+
+
+def test_injected_executor_is_used_and_left_open() -> None:
+    texts = [f"line {i}: the quick brown fox" for i in range(100)]
+    with ThreadPoolExecutor(2) as executor:
+        assert count_pretokens(texts, workers=2, executor=executor) == count_pretokens(texts)
+        assert executor.submit(len, "still open").result() == 10
 
 
 @pytest.mark.parametrize("method", START_METHODS)

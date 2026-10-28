@@ -1,8 +1,9 @@
 import string
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import regex
-from hypothesis import given, settings
+from hypothesis import given
 from hypothesis import strategies as st
 
 from fastbpe import Tokenizer, train_bpe
@@ -76,8 +77,10 @@ def test_pretokenize_is_lossless(text: str) -> None:
     assert "".join(pretokenize(text)) == text
 
 
-# Every example starts spawned worker processes (~50 ms), so keep the count low.
-@settings(max_examples=20)
+# Batching and merging of the parallel path, run on in-process threads; starting real
+# worker processes is covered by tests/test_parallel.py.
 @given(st.lists(st.text(max_size=100), max_size=50))
 def test_parallel_count_matches_serial(texts: list[str]) -> None:
-    assert count_pretokens(texts, workers=3) == count_pretokens(texts, workers=1)
+    with ThreadPoolExecutor(3) as executor:
+        parallel = count_pretokens(texts, workers=3, executor=executor)
+    assert parallel == count_pretokens(texts, workers=1)

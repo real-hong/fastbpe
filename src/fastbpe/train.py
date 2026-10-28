@@ -10,6 +10,7 @@ import heapq
 from collections import defaultdict
 from collections.abc import Sequence
 from itertools import pairwise
+from multiprocessing.context import BaseContext
 
 from fastbpe.pretokenize import count_pretokens, split_on_special_tokens
 
@@ -87,7 +88,12 @@ def _merge_word(word: Word, pair: Pair) -> Word:
 
 
 def train_bpe(
-    text: str, vocab_size: int, special_tokens: Sequence[str] = (), *, workers: int = 1
+    text: str,
+    vocab_size: int,
+    special_tokens: Sequence[str] = (),
+    *,
+    workers: int = 1,
+    mp_context: BaseContext | None = None,
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     """Train a byte-level BPE vocabulary on ``text``.
 
@@ -97,9 +103,10 @@ def train_bpe(
     token text never takes part in pair counting. Training stops early when no pairs
     are left. Raises ``ValueError`` if ``vocab_size < 256 + len(special_tokens)``.
 
-    ``workers > 1`` pre-tokenizes in that many processes, one batch of text between
-    special tokens at a time; text without special tokens cannot be split this way.
-    Workers are spawned, so scripts need an ``if __name__ == "__main__":`` guard.
+    ``workers > 1`` (opt-in) pre-tokenizes in that many processes started with
+    ``mp_context`` (default forkserver, else spawn), one batch of text between special
+    tokens at a time; text without special tokens cannot be split this way. Scripts that
+    use it need an ``if __name__ == "__main__":`` guard.
     """
     if len(set(special_tokens)) != len(special_tokens):
         raise ValueError(f"duplicate special tokens: {list(special_tokens)}")
@@ -112,7 +119,7 @@ def train_bpe(
 
     specials = set(special_tokens)
     chunks = [c for c in split_on_special_tokens(text, special_tokens) if c not in specials]
-    piece_counts = count_pretokens(chunks, workers=workers)
+    piece_counts = count_pretokens(chunks, workers=workers, mp_context=mp_context)
     words: list[Word] = [tuple(bytes([b]) for b in piece) for piece in piece_counts]
     word_counts = list(piece_counts.values())
 

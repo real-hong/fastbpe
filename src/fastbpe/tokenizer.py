@@ -3,6 +3,7 @@
 import json
 from collections.abc import Iterable, Sequence
 from collections.abc import Set as AbstractSet
+from multiprocessing.context import BaseContext
 from os import PathLike
 from pathlib import Path
 from typing import Literal, Self
@@ -74,9 +75,18 @@ class Tokenizer:
 
     @classmethod
     def train(
-        cls, text: str, vocab_size: int, special_tokens: Sequence[str] = (), *, workers: int = 1
+        cls,
+        text: str,
+        vocab_size: int,
+        special_tokens: Sequence[str] = (),
+        *,
+        workers: int = 1,
+        mp_context: BaseContext | None = None,
     ) -> Self:
-        vocab, merges = train_bpe(text, vocab_size, special_tokens, workers=workers)
+        """See ``train_bpe``; parallel pre-tokenization is opt-in via ``workers``."""
+        vocab, merges = train_bpe(
+            text, vocab_size, special_tokens, workers=workers, mp_context=mp_context
+        )
         first_special = len(vocab) - len(special_tokens)
         specials = {token: first_special + k for k, token in enumerate(special_tokens)}
         return cls(vocab, merges, specials)
