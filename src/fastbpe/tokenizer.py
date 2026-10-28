@@ -41,6 +41,8 @@ class Tokenizer:
         special_tokens: dict[str, int] | None = None,
     ) -> None:
         self._special_tokens = dict(special_tokens or {})
+        if "" in self._special_tokens:
+            raise ValueError("special tokens must not be empty")
         self._vocab = dict(vocab)
         for special, token_id in self._special_tokens.items():
             self._vocab[token_id] = special.encode()

@@ -83,8 +83,12 @@ def split_on_special_tokens(text: str, special_tokens: Iterable[str]) -> list[st
     """Split ``text`` around special tokens, keeping each one as its own chunk.
 
     Where special tokens overlap, the longest one wins. Empty chunks are dropped.
+    Raises ``ValueError`` for an empty special token, which would match between every
+    pair of characters.
     """
     tokens = sorted(special_tokens, key=len, reverse=True)
+    if tokens and not tokens[-1]:
+        raise ValueError("special tokens must not be empty")
     if not tokens:
         return [text] if text else []
     pattern = "(" + "|".join(re.escape(token) for token in tokens) + ")"

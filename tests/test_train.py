@@ -74,3 +74,8 @@ def test_parallel_training_matches_serial() -> None:
     text = EOT.join(docs)
     serial = train_bpe(text, vocab_size=400, special_tokens=[EOT])
     assert train_bpe(text, vocab_size=400, special_tokens=[EOT], workers=4) == serial
+
+
+def test_empty_special_token_is_rejected() -> None:
+    with pytest.raises(ValueError, match="empty"):
+        train_bpe("ab ab ab cd", vocab_size=300, special_tokens=[""])

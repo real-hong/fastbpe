@@ -2,7 +2,7 @@ from collections import Counter
 
 import pytest
 
-from fastbpe.pretokenize import count_pretokens, pretokenize
+from fastbpe.pretokenize import count_pretokens, pretokenize, split_on_special_tokens
 
 
 @pytest.mark.parametrize(
@@ -41,3 +41,9 @@ def test_count_pretokens_encodes_utf8() -> None:
 def test_count_pretokens_parallel_matches_serial() -> None:
     texts = [f"line {i}: the quick brown fox #{i % 7}" for i in range(1000)]
     assert count_pretokens(texts, workers=4) == count_pretokens(texts, workers=1)
+
+
+def test_empty_special_token_is_rejected() -> None:
+    # An empty alternative matches between every pair of characters.
+    with pytest.raises(ValueError, match="empty"):
+        split_on_special_tokens("ab cd", ["<|endoftext|>", ""])

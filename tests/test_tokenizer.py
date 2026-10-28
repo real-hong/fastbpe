@@ -75,6 +75,14 @@ def test_allowed_special_accepts_any_abstract_set(
     assert small_tokenizer.encode(EOT, allowed_special=allowed) == [eot]
 
 
+def test_empty_special_token_is_rejected_at_construction() -> None:
+    vocab = {i: bytes([i]) for i in range(256)}
+    with pytest.raises(ValueError, match="empty"):
+        Tokenizer(vocab, [], {"": 256})
+    with pytest.raises(ValueError, match="empty"):
+        Tokenizer.train("ab ab ab cd", vocab_size=300, special_tokens=[""])
+
+
 def test_decode_special_token(small_tokenizer: Tokenizer) -> None:
     eot = small_tokenizer.special_tokens[EOT]
     assert small_tokenizer.decode([eot]) == EOT
