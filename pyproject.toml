@@ -32,6 +32,8 @@ dev = [
 
 [tool.ruff]
 line-length = 100
+# Review evidence kept verbatim (see scripts/review/README.md).
+extend-exclude = ["scripts/review"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "PERF", "RUF", "N", "ANN"]
