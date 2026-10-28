@@ -100,6 +100,8 @@ def train_bpe(
     ``workers > 1`` pre-tokenizes in that many processes, one batch of text between
     special tokens at a time; text without special tokens cannot be split this way.
     """
+    if len(set(special_tokens)) != len(special_tokens):
+        raise ValueError(f"duplicate special tokens: {list(special_tokens)}")
     n_merges = vocab_size - 256 - len(special_tokens)
     if n_merges < 0:
         raise ValueError(

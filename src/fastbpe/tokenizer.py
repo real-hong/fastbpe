@@ -43,8 +43,17 @@ class Tokenizer:
         self._special_tokens = dict(special_tokens or {})
         if "" in self._special_tokens:
             raise ValueError("special tokens must not be empty")
+        if len(set(self._special_tokens.values())) != len(self._special_tokens):
+            raise ValueError(f"duplicate special token ids: {self._special_tokens}")
         self._vocab = dict(vocab)
         for special, token_id in self._special_tokens.items():
+            # A trained vocab already holds the special token at its id; anything else
+            # there would be silently overwritten.
+            existing = self._vocab.get(token_id)
+            if existing is not None and existing != special.encode():
+                raise ValueError(
+                    f"special token {special!r} id {token_id} is already used by {existing!r}"
+                )
             self._vocab[token_id] = special.encode()
         self._merges = list(merges)
 

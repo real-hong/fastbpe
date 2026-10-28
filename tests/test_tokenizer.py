@@ -83,6 +83,30 @@ def test_empty_special_token_is_rejected_at_construction() -> None:
         Tokenizer.train("ab ab ab cd", vocab_size=300, special_tokens=[""])
 
 
+BYTE_VOCAB = {i: bytes([i]) for i in range(256)}
+BYTE_VOCAB_RANKS = {token: i for i, token in BYTE_VOCAB.items()}
+
+
+def test_duplicate_special_tokens_are_rejected_in_training() -> None:
+    with pytest.raises(ValueError, match="duplicate"):
+        Tokenizer.train("abc <x> abc", vocab_size=300, special_tokens=["<x>", "<x>"])
+
+
+def test_special_tokens_sharing_an_id_are_rejected() -> None:
+    with pytest.raises(ValueError, match="duplicate"):
+        Tokenizer(BYTE_VOCAB, [], {"<a>": 256, "<b>": 256})
+
+
+def test_special_token_id_taken_by_a_regular_token_is_rejected() -> None:
+    with pytest.raises(ValueError, match="already used"):
+        Tokenizer.from_ranks(BYTE_VOCAB_RANKS | {b"ab": 256}, {"<s>": 256})
+
+
+def test_special_token_id_may_already_hold_its_own_bytes() -> None:
+    tok = Tokenizer(BYTE_VOCAB | {256: b"<s>"}, [], {"<s>": 256})
+    assert tok.encode("<s>") == [256]
+
+
 def test_decode_special_token(small_tokenizer: Tokenizer) -> None:
     eot = small_tokenizer.special_tokens[EOT]
     assert small_tokenizer.decode([eot]) == EOT

@@ -79,3 +79,9 @@ def test_parallel_training_matches_serial() -> None:
 def test_empty_special_token_is_rejected() -> None:
     with pytest.raises(ValueError, match="empty"):
         train_bpe("ab ab ab cd", vocab_size=300, special_tokens=[""])
+
+
+def test_duplicate_special_tokens_are_rejected() -> None:
+    # Would otherwise give two vocab ids for one token, one of them a ghost regular token.
+    with pytest.raises(ValueError, match="duplicate"):
+        train_bpe("abc <x> abc", vocab_size=300, special_tokens=["<x>", "<y>", "<x>"])
