@@ -87,7 +87,7 @@ def _merge_word(word: Word, pair: Pair) -> Word:
 
 
 def train_bpe(
-    text: str, vocab_size: int, special_tokens: Sequence[str] = ()
+    text: str, vocab_size: int, special_tokens: Sequence[str] = (), *, workers: int = 1
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     """Train a byte-level BPE vocabulary on ``text``.
 
@@ -96,6 +96,9 @@ def train_bpe(
     ties on frequency go to the lexicographically larger pair of byte strings. Special
     token text never takes part in pair counting. Training stops early when no pairs
     are left. Raises ``ValueError`` if ``vocab_size < 256 + len(special_tokens)``.
+
+    ``workers > 1`` pre-tokenizes in that many processes, one batch of text between
+    special tokens at a time; text without special tokens cannot be split this way.
     """
     n_merges = vocab_size - 256 - len(special_tokens)
     if n_merges < 0:
@@ -106,7 +109,7 @@ def train_bpe(
 
     specials = set(special_tokens)
     chunks = [c for c in split_on_special_tokens(text, special_tokens) if c not in specials]
-    piece_counts = count_pretokens(chunks)
+    piece_counts = count_pretokens(chunks, workers=workers)
     words: list[Word] = [tuple(bytes([b]) for b in piece) for piece in piece_counts]
     word_counts = list(piece_counts.values())
 

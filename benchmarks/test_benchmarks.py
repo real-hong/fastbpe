@@ -16,6 +16,15 @@ def test_train(benchmark: BenchmarkFixture, train_corpus: str, separator: str) -
     benchmark.pedantic(train_bpe, args=(train_corpus, TRAIN_VOCAB_SIZE, [separator]), rounds=ROUNDS)
 
 
+def test_train_parallel(benchmark: BenchmarkFixture, train_corpus: str, separator: str) -> None:
+    benchmark.pedantic(
+        train_bpe,
+        args=(train_corpus, TRAIN_VOCAB_SIZE, [separator]),
+        kwargs={"workers": 4},
+        rounds=ROUNDS,
+    )
+
+
 def test_count_pretokens(benchmark: BenchmarkFixture, train_corpus: str) -> None:
     benchmark.pedantic(count_pretokens, args=([train_corpus],), rounds=ROUNDS)
 

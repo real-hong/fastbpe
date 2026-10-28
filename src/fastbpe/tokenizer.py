@@ -62,8 +62,10 @@ class Tokenizer:
         return cls(vocab, _recover_merges(ranks), special_tokens)
 
     @classmethod
-    def train(cls, text: str, vocab_size: int, special_tokens: Sequence[str] = ()) -> Self:
-        vocab, merges = train_bpe(text, vocab_size, special_tokens)
+    def train(
+        cls, text: str, vocab_size: int, special_tokens: Sequence[str] = (), *, workers: int = 1
+    ) -> Self:
+        vocab, merges = train_bpe(text, vocab_size, special_tokens, workers=workers)
         first_special = len(vocab) - len(special_tokens)
         specials = {token: first_special + k for k, token in enumerate(special_tokens)}
         return cls(vocab, merges, specials)

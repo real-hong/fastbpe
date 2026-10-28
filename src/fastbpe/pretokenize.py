@@ -98,14 +98,33 @@ def _count(texts: list[str]) -> Counter[bytes]:
     return counts
 
 
+def _batches(texts: list[str], n: int) -> list[list[str]]:
+    """Group consecutive texts into about ``n`` batches of similar total length."""
+    target = sum(len(text) for text in texts) / n
+    batches: list[list[str]] = [[]]
+    size = 0
+    for text in texts:
+        if size >= target:
+            batches.append([])
+            size = 0
+        batches[-1].append(text)
+        size += len(text)
+    return batches
+
+
 def count_pretokens(texts: Iterable[str], *, workers: int = 1) -> Counter[bytes]:
-    """Count the UTF-8 encoded pieces of every text; ``workers > 1`` counts in parallel."""
+    """Count the UTF-8 encoded pieces of every text; ``workers > 1`` counts in parallel.
+
+    Each text is pre-tokenized whole, so the texts must already be cut where no piece
+    can cross, such as at special tokens. Parallelism is only as good as that split:
+    a single text runs in a single process.
+    """
     texts = list(texts)
     if workers <= 1:
         return _count(texts)
-    chunks = [texts[k::workers] for k in range(workers)]
+    # A few batches per worker keeps them all busy when text lengths vary.
     total: Counter[bytes] = Counter()
     with ProcessPoolExecutor(workers) as pool:
-        for counts in pool.map(_count, chunks):
+        for counts in pool.map(_count, _batches(texts, workers * 4)):
             total.update(counts)
     return total

@@ -67,3 +67,10 @@ def test_tokenizer_train_matches_train_bpe() -> None:
     assert tok.vocab == vocab
     assert tok.merges == merges
     assert tok.special_tokens == {EOT: 260}
+
+
+def test_parallel_training_matches_serial() -> None:
+    docs = [f"document {i}: the quick brown fox jumps over the dog #{i % 7}" for i in range(200)]
+    text = EOT.join(docs)
+    serial = train_bpe(text, vocab_size=400, special_tokens=[EOT])
+    assert train_bpe(text, vocab_size=400, special_tokens=[EOT], workers=4) == serial
