@@ -8,7 +8,7 @@ new entries and outdated entries are skipped when popped.
 
 import heapq
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from itertools import pairwise
 from multiprocessing.context import BaseContext
 
@@ -87,6 +87,32 @@ def _merge_word(word: Word, pair: Pair) -> Word:
     return tuple(merged)
 
 
+def _train_merges(piece_counts: Mapping[bytes, int], n_merges: int) -> list[Pair]:
+    """Up to ``n_merges`` merges learned from pre-token byte strings and their counts."""
+    words: list[Word] = [tuple(bytes([b]) for b in piece) for piece in piece_counts]
+    word_counts = list(piece_counts.values())
+
+    stats = _PairStats()
+    for index, word in enumerate(words):
+        stats.add(index, word, word_counts[index])
+
+    merges: list[Pair] = []
+    merged_pairs: set[Pair] = set()
+    while len(merges) < n_merges and (best := stats.pop_best()) is not None:
+        # A pair can come back after being merged when a later merge rebuilds one of its
+        # sides from different parts. Merge it again, but it is not a new vocab entry.
+        if best not in merged_pairs:
+            merged_pairs.add(best)
+            merges.append(best)
+        # Merging every occurrence left to right leaves no `best` pair behind, so its
+        # index entry can go; remove() skips pairs that are no longer indexed.
+        for index in stats.words.pop(best):
+            stats.remove(index, words[index], word_counts[index])
+            words[index] = _merge_word(words[index], best)
+            stats.add(index, words[index], word_counts[index])
+    return merges
+
+
 def train_bpe(
     text: str,
     vocab_size: int,
@@ -120,29 +146,10 @@ def train_bpe(
     specials = set(special_tokens)
     chunks = [c for c in split_on_special_tokens(text, special_tokens) if c not in specials]
     piece_counts = count_pretokens(chunks, workers=workers, mp_context=mp_context)
-    words: list[Word] = [tuple(bytes([b]) for b in piece) for piece in piece_counts]
-    word_counts = list(piece_counts.values())
-
-    stats = _PairStats()
-    for index, word in enumerate(words):
-        stats.add(index, word, word_counts[index])
-
-    merges: list[Pair] = []
-    merged_pairs: set[Pair] = set()
-    while len(merges) < n_merges and (best := stats.pop_best()) is not None:
-        # A pair can come back after being merged when a later merge rebuilds one of its
-        # sides from different parts. Merge it again, but it is not a new vocab entry.
-        if best not in merged_pairs:
-            merged_pairs.add(best)
-            merges.append(best)
-        # Merging every occurrence left to right leaves no `best` pair behind, so its
-        # index entry can go; remove() skips pairs that are no longer indexed.
-        for index in stats.words.pop(best):
-            stats.remove(index, words[index], word_counts[index])
-            words[index] = _merge_word(words[index], best)
-            stats.add(index, words[index], word_counts[index])
+    merges = _train_merges(piece_counts, n_merges)
 
     vocab = {i: bytes([i]) for i in range(256)}
+
     for left, right in merges:
         vocab[len(vocab)] = left + right
     for token in special_tokens:
