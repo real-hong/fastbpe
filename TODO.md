@@ -145,3 +145,38 @@ again and again and a "warm" encode is as slow as a cold one. 1 MB of base64 has
 503 ms / warm 495 ms) and unicode_all (135,180 distinct, 356 / 354 ms).
 Options to compare by measurement: evicting part of the cache (e.g. the oldest half of
 the insertion-ordered dict) or evicting by access order (LRU).
+
+### Measuring in one process misleads (2026-10-29)
+
+Variants timed one after another in one process were off by up to ~25% on low_rep warm
+encode, with the same code path for both (no eviction at that capacity). Cause: the
+previous input's tokenizer was still alive, its cache thinned (every other entry
+freed). The next cache filled those holes and spread over more pages. Separate process,
+low_rep cache of 118,253 entries, after a unicode_all run whose thinned tokenizer is
+kept alive or not (scratch script, numbers from one run each):
+
+| variant before | kept alive | key pages | value pages | warm |
+|---|---|---|---|---|
+| clear | no | 2,053 | 2,700 | 43.3 ms |
+| clear | yes | 2,053 | 2,757 | 43.7 ms |
+| thin | no | 2,053 | 2,699 | 43.4 ms |
+| thin | yes | 3,035 | 3,879 | 53.7 ms |
+
+Same with `PYTHONMALLOC=malloc`, so not specific to pymalloc. `scripts/time_variants.py`
+now runs every (input, variant) pair in its own process, rotating the variant order
+each repetition; pyperf was not used because it runs all processes of one benchmark
+before the next, so variants are not interleaved and drift enters the comparison.
+
+**To re-check**: earlier gains of ~10% or less measured with several variants or
+tokenizers in one process may be affected the same way, e.g. finding #8 (1.12-1.18x
+cold encode, pytest-benchmark in one session) and the whole-piece lookup (cold encode
+interleaved in one process, 0.93-1.18x). Re-measure them with one process per
+measurement before relying on them.
+
+## Next: inline the cache lookup in `encode`
+
+Every piece costs a Python method call to `_encode_piece` even on a hit. A per-instance
+`functools.lru_cache` (a C call) made warm regular encode 1.04-1.05x faster despite its
+LRU bookkeeping, which points at that call (measured in one process with one other
+variant, so subject to the caveat above). Measure `cache.get(piece)` inline in the
+`encode` loop, calling `_encode_piece` only on a miss, with `scripts/time_variants.py`.

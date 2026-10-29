@@ -12,7 +12,7 @@ import unicodedata
 from collections.abc import Callable
 from functools import cache
 
-from corpus import load_corpus
+from corpus import SEPARATOR, load_corpus
 
 
 def regular(n: int) -> str:
@@ -125,6 +125,26 @@ def many_specials(n: int) -> tuple[str, list[str]]:
         out.append(r.choice(specials))
         i += k
     return "".join(out), specials
+
+
+def stream(n: int) -> list[str]:
+    """Documents for a long-running encoder, ``n`` bytes in all, encoded one by one.
+
+    Half is the corpus (``n // 4`` bytes of it) twice over, its documents in random
+    order each time; the other half is base64 and random words cut into chunks, one
+    between every two documents, that never repeat. The never-repeating pieces far
+    exceed the encode cache, so it is emptied or thinned again and again, while the
+    corpus pieces come back after a long gap.
+    """
+    r = random.Random(0)
+    docs = [d for d in load_corpus(n // 4).split(SEPARATOR) if d]
+    order = r.sample(docs, len(docs)) + r.sample(docs, len(docs))
+    filler = base64_text(n // 4) + low_repetition(n // 4)
+    step = len(filler) // len(order) + 1
+    out: list[str] = []
+    for i, doc in enumerate(order):
+        out += [doc, filler[i * step : (i + 1) * step]]
+    return out
 
 
 # Inputs without special tokens of their own; the corpus uses corpus.SEPARATOR.
