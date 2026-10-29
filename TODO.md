@@ -15,5 +15,7 @@ Each one is measured against the baseline in place after #7, not the one before 
 pieces. On low-repetition input whose distinct pieces exceed that, the cache is emptied
 again and again and a "warm" encode is as slow as a cold one. 1 MB of base64 has
 103,599 distinct pieces: cold 0.494 s, warm 0.485 s (`scripts/measure_share.py`).
+`benchmarks/test_pretokenize.py` shows the same for low_rep (118,253 distinct, cold
+503 ms / warm 495 ms) and unicode_all (135,180 distinct, 356 / 354 ms).
 Options to compare by measurement: evicting part of the cache (e.g. the oldest half of
 the insertion-ordered dict) or evicting by access order (LRU).
