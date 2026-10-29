@@ -51,6 +51,9 @@ def gpt2() -> tiktoken.Encoding:
     try:
         return tiktoken.get_encoding("gpt2")
     except Exception as exc:  # e.g. offline on the first run, before the data is cached
+        # CI sets FASTBPE_REQUIRE_ORACLE so that a failed download cannot pass as skips.
+        if os.environ.get("FASTBPE_REQUIRE_ORACLE"):
+            pytest.fail(f"tiktoken gpt2 encoding unavailable: {exc}")
         pytest.skip(f"tiktoken gpt2 encoding unavailable: {exc}")
 
 
