@@ -17,6 +17,16 @@
   needs only ~log2(n) merges, each touching most nodes. Run-length compression of
   repeated bytes would address it; not done.
 
+- Trained regular tokens (the 256 bytes and one per merge) have distinct bytes: a
+  token forms in every word through the same merge, so no merge can rebuild it and no
+  merged pair can come back. The comments that said otherwise (from the naive
+  baseline) are corrected, and the dead "pair merged again, no new vocab entry" branch
+  is replaced by a `RuntimeError` if a merge ever rebuilds an existing token.
+- Special tokens are a namespace of their own, as in tiktoken: a single-byte special
+  token (e.g. `"a"`) shares its bytes with a base token and both ids stay valid.
+  `train_bpe` now warns (`UserWarning`) for such a token, since that byte is cut out
+  of the training text and never takes part in merges; output is unchanged.
+
 ### Pre-tokenization
 
 - `pretokenize` maps each character to an ASCII representative of its class (letter,

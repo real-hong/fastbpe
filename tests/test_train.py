@@ -1,4 +1,7 @@
+import warnings
+
 import pytest
+from naive_bpe import naive_train_bpe
 
 from fastbpe import Tokenizer, train_bpe
 
@@ -85,3 +88,30 @@ def test_duplicate_special_tokens_are_rejected() -> None:
     # Would otherwise give two vocab ids for one token, one of them a ghost regular token.
     with pytest.raises(ValueError, match="duplicate"):
         train_bpe("abc <x> abc", vocab_size=300, special_tokens=["<x>", "<y>", "<x>"])
+
+
+@pytest.mark.parametrize("special", ["a", "\x00", " ", "\x7f"])
+def test_single_byte_special_token_warns(special: str) -> None:
+    text = f"abc{special}ab a\x00b\x7f"
+    with pytest.warns(UserWarning, match="will not take part in merges") as caught:
+        warned = train_bpe(text, vocab_size=300, special_tokens=[special, EOT])
+    assert len(caught) == 1
+    assert repr(special) in str(caught[0].message)
+    # The warning changes nothing: same result with it filtered out, and as the naive
+    # reference trainer, which does not warn.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        assert train_bpe(text, vocab_size=300, special_tokens=[special, EOT]) == warned
+    assert naive_train_bpe(text, vocab_size=300, special_tokens=[special, EOT]) == warned
+
+
+def test_tokenizer_train_warns_for_single_byte_special_token() -> None:
+    with pytest.warns(UserWarning, match="will not take part in merges"):
+        Tokenizer.train("abc abc", vocab_size=300, special_tokens=["a"])
+
+
+@pytest.mark.parametrize("special", [EOT, "ab", "\xe9", "中"])
+def test_multi_byte_special_tokens_do_not_warn(special: str) -> None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        train_bpe(f"abc{special}abc", vocab_size=300, special_tokens=[special])
