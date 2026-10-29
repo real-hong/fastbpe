@@ -46,9 +46,11 @@
 ### Encoding
 
 - `bpe_parts` builds its initial heap with one `heapify` and inlines the re-pushes
-  after each merge. Cold encode of 1 MB: regular 1.07x, cjk 1.16x, base64 1.12x,
-  minified 1.12x, unicode_all 1.18x, one 160 kB DNA piece 1.04x; warm encode is
-  unchanged except where the cache is too small to stay warm. Short-piece scan paths,
+  after each merge. Cold encode of 1 MB, one process per measurement: cjk 1.14x,
+  unicode_all 1.14x, base64 1.11x, minified 1.09x, regular 1.03x, one 160 kB DNA
+  piece 1.03x; warm encode is unchanged except where the cache is too small to stay
+  warm. (First reported from pytest-benchmark as regular 1.07x, cjk 1.16x,
+  unicode_all 1.18x; re-measured, TODO.md.) Short-piece scan paths,
   C-level iterator chains and local bindings were measured and not kept (TODO.md).
 
 - A pre-tokenized piece whose bytes are a token encodes to that token without running
@@ -56,9 +58,12 @@
   vocabulary holding a token that no merge reaches (e.g. `b"abc"` without `ab`/`bc`),
   `encode("abc")` now gives that token instead of three bytes. For GPT-2 ranks and for
   trained vocabularies the output is unchanged (BPE on a token's bytes ends in that
-  token; `tests/test_whole_token.py`). Cold encode of 1 MB: regular 1.17x, 50 special
-  tokens 1.11x; low-repetition inputs with few whole-token pieces pay one extra lookup
-  per distinct piece (unicode_all 0.98x, low_rep 0.99x with GC off).
+  token; `tests/test_whole_token.py`). Cold encode of 1 MB, one process per
+  measurement: regular 1.17x, 50 special tokens 1.10x; low-repetition inputs with few
+  whole-token pieces pay one extra lookup per distinct piece (unicode_all 0.97x,
+  low_rep 0.99x, with GC off and on). Corrected: unicode_all was given as 0.98x with
+  GC off and 0.93-0.95x with GC on (TODO.md); both were measured in one process,
+  variants one after the other, which biased them, and re-measure as 0.97x.
 
 - `Tokenizer(..., cache_size=...)` (also on `train`, `from_ranks` and `load`) sets how
   many encoded pieces a tokenizer keeps; the default stays 100,000 (~15-22 MB at
@@ -125,6 +130,8 @@
   tokenizer's warm encode up to ~24% slower (TODO.md). pyperf was considered and not
   used: it runs all processes of one benchmark before the next, so variants are not
   interleaved. `scripts/measure_cache.py` simulates eviction policies' hit rates.
+  It has a `master_copy` control variant (master's code copied into the script),
+  which CLAUDE.md now requires in every comparison, plus `--gc` and `--json`.
 - CI also runs the tests on free-threaded Python 3.14 (`3.14t`); `tests/test_cache.py`
   shares one tokenizer between threads and checks that the GIL stays off.
 
