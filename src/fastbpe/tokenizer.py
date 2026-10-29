@@ -13,7 +13,12 @@ from fastbpe.encode import bpe_parts, encode_bytes
 from fastbpe.pretokenize import pretokenize, special_token_pattern
 from fastbpe.train import train_bpe
 
-# Encoded pieces kept per tokenizer; the cache is simply emptied when it fills up.
+# Default number of encoded pieces kept per tokenizer (the ``cache_size`` argument).
+# The cache is emptied when it fills up. Each entry takes ~150-220 bytes (the piece, its
+# ids and the dict slot, measured on 1 MB inputs with GPT-2 ranks), so the default is
+# ~15-22 MB per tokenizer at most. Keeping part of the cache instead (every other entry)
+# was measured and rejected: on a long stream of mostly new pieces it was 5-6% slower
+# (TODO.md, encode cache).
 CACHE_SIZE = 100_000
 # Special-token patterns kept per tokenizer for subsets of its special tokens passed as
 # allowed_special; "all" has its own slot.
@@ -47,7 +52,20 @@ class Tokenizer:
         vocab: dict[int, bytes],
         merges: list[tuple[bytes, bytes]],
         special_tokens: dict[str, int] | None = None,
+        *,
+        cache_size: int = CACHE_SIZE,
     ) -> None:
+        """``cache_size`` bounds the encoded pieces kept for reuse (0: no cache).
+
+        A larger cache helps text with many distinct pieces (code, base64, many
+        languages) that is encoded repeatedly, at ~150-220 bytes per entry; the cache
+        is emptied when full, so input with far more distinct pieces gains little.
+        """
+        if isinstance(cache_size, bool) or not isinstance(cache_size, int):
+            raise TypeError(f"cache_size must be an int, got {cache_size!r}")
+        if cache_size < 0:
+            raise ValueError(f"cache_size must not be negative, got {cache_size}")
+        self._cache_size = cache_size
         self._special_tokens = dict(special_tokens or {})
         if "" in self._special_tokens:
             raise ValueError("special tokens must not be empty")
@@ -84,10 +102,16 @@ class Tokenizer:
         self._special_cache: dict[frozenset[str], _SpecialSplit] = {}
 
     @classmethod
-    def from_ranks(cls, ranks: dict[bytes, int], special_tokens: dict[str, int]) -> Self:
+    def from_ranks(
+        cls,
+        ranks: dict[bytes, int],
+        special_tokens: dict[str, int],
+        *,
+        cache_size: int = CACHE_SIZE,
+    ) -> Self:
         """Build from tiktoken-style mergeable ranks (token bytes -> id)."""
         vocab = {token_id: token for token, token_id in ranks.items()}
-        return cls(vocab, _recover_merges(ranks), special_tokens)
+        return cls(vocab, _recover_merges(ranks), special_tokens, cache_size=cache_size)
 
     @classmethod
     def train(
@@ -98,6 +122,7 @@ class Tokenizer:
         *,
         workers: int = 1,
         mp_context: BaseContext | None = None,
+        cache_size: int = CACHE_SIZE,
     ) -> Self:
         """See ``train_bpe``; parallel pre-tokenization is opt-in via ``workers``."""
         vocab, merges = train_bpe(
@@ -105,7 +130,7 @@ class Tokenizer:
         )
         first_special = len(vocab) - len(special_tokens)
         specials = {token: first_special + k for k, token in enumerate(special_tokens)}
-        return cls(vocab, merges, specials)
+        return cls(vocab, merges, specials, cache_size=cache_size)
 
     @property
     def vocab(self) -> dict[int, bytes]:
@@ -184,9 +209,12 @@ class Tokenizer:
             # a vocabulary holding a token no merge reaches, it decides the result.
             token_id = self._ranks.get(data)
             ids = [token_id] if token_id is not None else encode_bytes(data, self._ranks)
-            if len(self._cache) >= CACHE_SIZE:
-                self._cache.clear()
-            self._cache[piece] = ids
+            if self._cache_size:
+                # Without a lock: threads may each insert after another's check, so the
+                # cache can exceed its size by one entry per thread, never more.
+                if len(self._cache) >= self._cache_size:
+                    self._cache.clear()
+                self._cache[piece] = ids
         return ids
 
     def decode(self, ids: Iterable[int]) -> str:
@@ -205,8 +233,8 @@ class Tokenizer:
         Path(path).write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
     @classmethod
-    def load(cls, path: str | PathLike[str]) -> Self:
+    def load(cls, path: str | PathLike[str], *, cache_size: int = CACHE_SIZE) -> Self:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         vocab = {int(token_id): bytes.fromhex(token) for token_id, token in data["vocab"].items()}
         merges = [(bytes.fromhex(left), bytes.fromhex(right)) for left, right in data["merges"]]
-        return cls(vocab, merges, data["special_tokens"])
+        return cls(vocab, merges, data["special_tokens"], cache_size=cache_size)

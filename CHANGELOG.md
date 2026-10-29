@@ -60,6 +60,18 @@
   tokens 1.11x; low-repetition inputs with few whole-token pieces pay one extra lookup
   per distinct piece (unicode_all 0.98x, low_rep 0.99x with GC off).
 
+- `Tokenizer(..., cache_size=...)` (also on `train`, `from_ranks` and `load`) sets how
+  many encoded pieces a tokenizer keeps; the default stays 100,000 (~15-22 MB at
+  ~150-220 bytes per entry). `0` disables the cache; a negative size raises
+  `ValueError`, anything but an `int` (including `bool`) `TypeError`. The cache is
+  still emptied when full. Keeping every other entry instead was measured and rejected:
+  on a 4 MB stream of documents between never-repeating filler (`encode_stream`
+  benchmark) it was 5-6% slower than emptying, with a hit rate only ~0.5 points
+  higher; it won only on re-encoding the same 1 MB text (base64 1.38x, low_rep 1.43x),
+  a cyclic scan that favours whatever keeps the most entries. Encode speed with the
+  default size is unchanged (regular, high_rep, low_rep and the stream at 1.00x, one
+  process per measurement).
+
 ### Parallel pre-tokenization
 
 - Parallel pre-tokenization is **opt-in**: `train_bpe`, `Tokenizer.train` and
@@ -108,6 +120,13 @@
 - A Claude Code PreToolUse hook (`.claude/settings.json`) blocks Bash pipelines
   without `pipefail`; CLAUDE.md requires claims about external libraries to be
   backed by committed, repeatable tests or scripts.
+- `scripts/time_variants.py` times variants with one process per measurement, in
+  rotating order: in one process, a thinned cache that was still alive made the next
+  tokenizer's warm encode up to ~24% slower (TODO.md). pyperf was considered and not
+  used: it runs all processes of one benchmark before the next, so variants are not
+  interleaved. `scripts/measure_cache.py` simulates eviction policies' hit rates.
+- CI also runs the tests on free-threaded Python 3.14 (`3.14t`); `tests/test_cache.py`
+  shares one tokenizer between threads and checks that the GIL stays off.
 
 ### Fixes
 

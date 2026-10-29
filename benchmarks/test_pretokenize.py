@@ -11,6 +11,13 @@ Each case is about 1 MB of UTF-8 (``scripts/adversarial_inputs.py``) and runs fo
   distinct pieces (103,599, 118,253 and 135,180) exceed ``CACHE_SIZE`` (100k), so the
   cache is emptied during every encode (see TODO.md).
 
+``encode_stream`` encodes ``adversarial_inputs.stream`` (4 MB) document by document with
+one tokenizer, as a long-running encoder would: corpus documents twice over between
+never-repeating filler, far more distinct pieces than the cache holds. It is the case
+to judge cache policies by, not the warm 1 MB inputs, whose second pass is a cyclic scan
+that favours whatever keeps the most entries. For comparisons between variants use
+``scripts/time_variants.py`` (one process per measurement), not this session-wide run.
+
 ``pretokenize_cold_table`` times the first ``pretokenize`` call after the character
 table is emptied, on inputs with many distinct code points.
 """
@@ -19,7 +26,7 @@ from functools import cache
 from typing import Any
 
 import pytest
-from adversarial_inputs import INPUTS, many_specials
+from adversarial_inputs import INPUTS, many_specials, stream
 from corpus import SEPARATOR
 from pytest_benchmark.fixture import BenchmarkFixture
 
@@ -38,6 +45,16 @@ def case(name: str) -> tuple[str, list[str]]:
     if name == "specials":
         return many_specials(SIZE)
     return INPUTS[name](SIZE), [SEPARATOR] if name == "regular" else []
+
+
+@cache
+def stream_docs() -> list[str]:
+    return stream(4 * SIZE)
+
+
+def encode_docs(tokenizer: Tokenizer, docs: list[str]) -> None:
+    for doc in docs:
+        tokenizer.encode(doc)
 
 
 def chunks(name: str) -> list[str]:
@@ -91,6 +108,15 @@ def test_encode_warm(benchmark: BenchmarkFixture, gpt2_tokenizer: Tokenizer, nam
     text, specials = case(name)
     tokenizer = fresh_tokenizer(gpt2_tokenizer, specials)
     benchmark.pedantic(tokenizer.encode, args=(text,), rounds=ROUNDS, warmup_rounds=1)
+
+
+def test_encode_stream(benchmark: BenchmarkFixture, gpt2_tokenizer: Tokenizer) -> None:
+    docs = stream_docs()
+
+    def setup() -> tuple[tuple[Any, ...], dict[str, Any]]:
+        return (fresh_tokenizer(gpt2_tokenizer, []), docs), {}
+
+    benchmark.pedantic(encode_docs, setup=setup, rounds=ROUNDS)
 
 
 @pytest.mark.parametrize("name", ["cjk", "unicode_all"])
