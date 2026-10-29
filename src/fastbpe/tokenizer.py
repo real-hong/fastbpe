@@ -65,8 +65,10 @@ class Tokenizer:
             self._vocab[token_id] = special.encode()
         self._merges = list(merges)
 
-        # Training can build the same bytes through two different merges; encoding
-        # always uses the lowest id.
+        # Trained regular tokens have distinct bytes (see train._train_merges), but a
+        # vocab passed in or loaded may repeat bytes; encoding then uses the lowest id.
+        # Special tokens are left out: like tiktoken, they are a namespace of their own
+        # and may share bytes with a regular token (e.g. a special token "a").
         special_ids = set(self._special_tokens.values())
         self._ranks: dict[bytes, int] = {}
         for token_id, token in sorted(self._vocab.items()):

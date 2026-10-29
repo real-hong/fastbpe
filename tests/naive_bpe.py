@@ -53,8 +53,8 @@ def naive_merges(piece_counts: Mapping[bytes, int], n_merges: int) -> list[Pair]
         if not pair_counts:
             break
         best = max(pair_counts, key=lambda pair: (pair_counts[pair], pair))
-        # A pair can come back after being merged when a later merge rebuilds one of its
-        # sides from different parts. Merge it again, but it is not a new vocab entry.
+        # Never true for a trained merge list: a pair cannot come back once merged (see
+        # fastbpe.train._train_merges). Kept as written in 762305e, the reference.
         if best not in merges:
             merges.append(best)
         word_counts = _apply_merge(word_counts, best)

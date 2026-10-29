@@ -9,6 +9,7 @@ count, and the heap is rebuilt when outdated entries outnumber live pairs 2 to 1
 """
 
 import heapq
+import warnings
 from array import array
 from collections.abc import Mapping, Sequence
 from multiprocessing.context import BaseContext
@@ -148,13 +149,18 @@ def _train_merges(piece_counts: Mapping[bytes, int], n_merges: int) -> list[Pair
     stats = _PairStats()
     stats.add_words(piece_counts)
     merges: list[Pair] = []
-    merged_pairs: set[Pair] = set()
+    # Every merge builds a token that did not exist before, so a merged pair never comes
+    # back either. Wherever a token forms, no merge crossed its edges (tokens are never
+    # split), so the merges inside it, overlaps resolved leftmost first, depend only on
+    # its own bytes: it forms in every word at the same step, from the same pair. A
+    # merge that rebuilt existing bytes would mean the pair statistics are broken.
+    known = set(_BYTES)
     while len(merges) < n_merges and (best := stats.pop_best()) is not None:
-        # A pair can come back after being merged when a later merge rebuilds one of its
-        # sides from different parts. Merge it again, but it is not a new vocab entry.
-        if best not in merged_pairs:
-            merged_pairs.add(best)
-            merges.append(best)
+        token = best[0] + best[1]
+        if token in known:
+            raise RuntimeError(f"internal error: merge {best!r} rebuilds existing token {token!r}")
+        known.add(token)
+        merges.append(best)
         stats.merge(best)
     return merges
 
@@ -175,6 +181,12 @@ def train_bpe(
     token text never takes part in pair counting. Training stops early when no pairs
     are left. Raises ``ValueError`` if ``vocab_size < 256 + len(special_tokens)``.
 
+    Regular tokens (bytes and merges) have distinct bytes. Special tokens are a separate
+    namespace, as in tiktoken: a single-byte special token such as ``"a"`` shares its
+    bytes with a base token and both ids are kept. Since every occurrence of that byte
+    is cut out of the text as the special token, the byte never takes part in merges;
+    ``train_bpe`` warns (``UserWarning``) about it and trains as usual.
+
     ``workers > 1`` (opt-in) pre-tokenizes in that many processes started with
     ``mp_context`` (default forkserver, else spawn), one batch of text between special
     tokens at a time; text without special tokens cannot be split this way. Scripts that
@@ -188,6 +200,15 @@ def train_bpe(
             f"vocab_size must be at least {256 + len(special_tokens)} "
             f"(256 bytes + {len(special_tokens)} special tokens), got {vocab_size}"
         )
+
+    for token in special_tokens:
+        if len(token.encode()) == 1:
+            warnings.warn(
+                f"special token {token!r} is a single byte: that byte is cut out of the "
+                "training text and will not take part in merges",
+                UserWarning,
+                stacklevel=2,
+            )
 
     specials = set(special_tokens)
     chunks = [c for c in split_on_special_tokens(text, special_tokens) if c not in specials]

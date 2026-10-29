@@ -6,11 +6,14 @@ no hooks for them.
 
 import random
 from collections import Counter
+from collections.abc import Mapping
 
+import pytest
 from bpe_strategies import overlapping_words, piece_counts
 from hypothesis import example, given
 from hypothesis import strategies as st
 
+import fastbpe.train as train_module
 from fastbpe.train import _DEAD, _NONE, Pair, _PairStats, _train_merges
 
 
@@ -95,3 +98,27 @@ def test_heap_is_rebuilt_and_bounded_on_a_long_word() -> None:
     word = "".join(random.Random(0).choices("abcdefghij", k=3000)).encode()
     _, rebuilds = train_checked({word: 1})
     assert rebuilds > 0
+
+
+class _RepeatingStats:
+    """Pair statistics broken on purpose: the same pair is popped twice."""
+
+    def __init__(self) -> None:
+        self._pops = [(b"a", b"b"), (b"a", b"b")]
+
+    def add_words(self, piece_counts: Mapping[bytes, int]) -> None:
+        pass
+
+    def pop_best(self) -> Pair | None:
+        return self._pops.pop() if self._pops else None
+
+    def merge(self, best: Pair) -> None:
+        pass
+
+
+def test_merge_rebuilding_an_existing_token_is_an_internal_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(train_module, "_PairStats", _RepeatingStats)
+    with pytest.raises(RuntimeError, match="rebuilds existing token b'ab'"):
+        train_module._train_merges({b"ab": 1}, 10)
