@@ -54,6 +54,9 @@ INPUT_NAMES = [*INPUTS, "specials", "stream", "regular_after_unicode_all"]
 class PreInlineTokenizer(Tokenizer):
     """Master before ``encode`` looked cache hits up itself: a method call per piece."""
 
+    # Methods this class adds and its own encode calls (see unknown_overrides).
+    ADDS = frozenset({"_encode_piece"})
+
     def encode(
         self, text: str, *, allowed_special: Literal["all"] | AbstractSet[str] = "all"
     ) -> list[int]:
@@ -301,6 +304,27 @@ VARIANTS: dict[str, type[Tokenizer]] = {
 DEFAULT_VARIANTS = "clear,thin"
 
 
+def unknown_overrides(variants: dict[str, type[Tokenizer]]) -> list[str]:
+    """Methods of the variants that ``Tokenizer`` does not have, as ``"name: Class.method"``.
+
+    After a refactor of ``Tokenizer``, a variant overriding a method master no longer
+    has would time master's code unchanged and report noise as its result. A class that
+    adds a method on purpose, and calls it itself, lists it in ``ADDS``.
+    """
+    unknown = []
+    for name, cls in variants.items():
+        added: set[str] = set()
+        for base in cls.__mro__:
+            added |= getattr(base, "ADDS", frozenset())
+        for klass in cls.__mro__[: cls.__mro__.index(Tokenizer)]:
+            unknown.extend(
+                f"{name}: {klass.__name__}.{attr}"
+                for attr, value in vars(klass).items()
+                if callable(value) and not hasattr(Tokenizer, attr) and attr not in added
+            )
+    return unknown
+
+
 def gpt2_parts() -> tuple[dict[int, bytes], list[tuple[bytes, bytes]], dict[str, int]]:
     enc = tiktoken.get_encoding("gpt2")
     gpt2 = Tokenizer.from_ranks(enc._mergeable_ranks, enc._special_tokens)
@@ -397,6 +421,8 @@ def main() -> None:
     parser.add_argument("--json", help="also write every process's values to this file")
     parser.add_argument("--worker", nargs=2, metavar=("INPUT", "VARIANT"))
     args = parser.parse_args()
+    if unknown := unknown_overrides(VARIANTS):
+        raise SystemExit("methods Tokenizer does not have:\n  " + "\n  ".join(unknown))
     if args.worker:
         print(json.dumps(worker(*args.worker)))
         return
