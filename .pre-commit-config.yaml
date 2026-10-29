@@ -1,0 +1,16 @@
+# Install once per clone: uv run pre-commit install
+# (installs the pre-push hook below; see default_install_hook_types).
+default_install_hook_types: [pre-push]
+
+repos:
+  - repo: local
+    hooks:
+      # The fast suite (no --runslow, default hypothesis profile), before every push.
+      # CI runs the full suite; this catches a red commit before it leaves the machine.
+      - id: pytest-fast
+        name: pytest (fast)
+        entry: uv run pytest -q
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

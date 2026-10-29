@@ -83,8 +83,8 @@ def test_special_tokens_sharing_bytes_with_regular_tokens_follow_tiktoken(
 ) -> None:
     text, specials = case
     # Where one special token is a prefix of another, both match at one position.
-    # tiktoken then takes whichever comes first in its hash map (for "xy"/"xyz" it
-    # depends on their ids), so it is no oracle there; this tokenizer takes the longest.
+    # tiktoken then takes whichever its hash map lists first ("a"/"ab": the shorter,
+    # "xy"/"xyz": the longer), so it is no oracle there; this tokenizer takes the longest.
     assume(not any(a != b and b.startswith(a) for a in specials for b in specials))
     # As in test_oracle.py: code points this Python's Unicode database does not know
     # may be letters to tiktoken's newer one.
