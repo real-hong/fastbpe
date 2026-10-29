@@ -1,7 +1,29 @@
 # TODO
 
-Optimizations deferred until review finding #7 (category-map pre-tokenizer) is done.
-Each one is measured against the baseline in place after #7, not the one before it.
+Review findings #7 (category-map pre-tokenizer, 8a3d987) and #6 (special-token patterns
+compiled once, 25fdd06) are done. Measure each item below against the current master.
+
+## Hotspots after #6 and #7 (2026-10-29)
+
+`scripts/measure_share.py` and benchmarks on ~1 MB inputs, with an estimate of what each
+change could actually remove (see the lesson under the rejected item below):
+
+- **Cold encode is BPE on distinct pieces** (`bpe_parts`): cold minus warm is ~180 ms
+  of 210 ms on CJK, ~290 ms of 343 ms on base64 (warm there is cold, see the cache
+  item), 209 ms on one 160 kB DNA piece. Review finding #8 (`scripts/review/bpe_micro.py`:
+  local bindings, inlining `push`) measured ~2x on unique pieces, so roughly half of
+  that is removable. Largest removable time in encoding.
+- **Training on adversarial input is the merges**: 87% (base64), 91% (minified), 98%
+  (CJK, 1.1 s at vocab 1000), ~100% (DNA). Not profiled yet; nothing is known about
+  what is removable. Profile CJK first.
+- **Many short chunks** (50 special tokens, a chunk every ~16 chars, 62,581 chunks):
+  `count_pretokens` 117 ms vs 53 ms on the plain corpus of the same size. Per chunk,
+  `pretokenize` costs 74 ms vs 35 ms (translate, findall and two checks per call), and
+  `_count`'s per-text `Counter.update` with a generator ~22 ms (one generator over all
+  chunks: 96 ms). Removable: about those 22 ms, plus part of the ~39 ms per-call
+  overhead in `pretokenize`.
+- Warm encode on the corpus is 68% `pretokenize` (38 of 55 ms); the rest is cache
+  lookups and `list.extend`, little to remove.
 
 ## Rejected: count `str` pieces, encode only the distinct keys
 
