@@ -9,8 +9,8 @@ compiled once, 25fdd06) are done. Measure each item below against the current ma
 change could actually remove (see the lesson under the rejected item below):
 
 - **Cold encode is BPE on distinct pieces** (`bpe_parts`): finding #8 is done, see
-  its section below; it gave 1.12-1.18x on adversarial cold encode, not the ~2x the
-  review measured. What is left is mostly per-byte slicing and dict lookups in Python.
+  its section below; it gave 1.09-1.14x on adversarial cold encode (re-measured one
+  process per measurement), not the ~2x the review measured. What is left is mostly per-byte slicing and dict lookups in Python.
 - **Training on adversarial input is the merges**: 87% (base64), 91% (minified), 98%
   (CJK, 1.1 s at vocab 1000), ~100% (DNA). Not profiled yet; nothing is known about
   what is removable. Profile CJK first.
@@ -54,6 +54,34 @@ inlined re-pushes (a5b2521). Cold `Tokenizer.encode`, pytest-benchmark min, ms:
 Warm changes only where the cache cliff makes warm cold (base64, low_rep,
 unicode_all); the other warm differences are noise (one cjk warm run read 31.9 ms).
 
+Re-measured on master (2026-10-29) with `scripts/time_variants.py --reps 7 --variants
+clear,master_copy,bpe_pre,bpe_heapify,no_whole`: one process per measurement, GC off,
+master's `bpe_parts` against copies of the code before 880d05f (`bpe_pre`) and before
+a5b2521 (`bpe_heapify`). The control `master_copy` (master's `_encode_piece` copied
+into the script) was 0.99-1.01x of `clear` on every input. Cold encode, master faster
+by (min; medians agree within 0.01):
+
+| input | before | re-measured | heapify | inlined re-pushes |
+|---|---|---|---|---|
+| base64 | 1.12x | 1.11x | 1.03x | 1.08x |
+| minified | 1.12x | 1.09x | 1.04x | 1.05x |
+| cjk | 1.16x | 1.14x | 1.08x | 1.05x |
+| unicode_all | 1.18x | 1.14x | 1.05x | 1.09x |
+| whitespace | 1.15x | 1.13x | 1.07x | 1.06x |
+| emoji | 1.12x | 1.09x | 1.05x | 1.04x |
+| low_rep | 1.12x | 1.12x | 1.04x | 1.08x |
+| dna | 1.04x | 1.03x | | |
+| regular | 1.07x | 1.03x | 1.00x | 1.03x |
+| specials | 1.06x | 1.03x | | |
+| high_rep | 1.01x | 1.00x | | |
+| stream, pass 1 (4 MB) | | 1.10x | | |
+
+Warm where the cache cliff makes it cold: base64 1.10x, low_rep 1.10x, unicode_all
+1.16x. The gain holds, 0-4 points below the pytest-benchmark numbers. regular shrank
+to under half of its gain, specials to half. Unverified guess: the old numbers predate the
+whole-piece lookup, which now skips BPE for many regular pieces, leaving less for
+`bpe_parts` to save there.
+
 Rejected, measured on `bpe_parts` over the same pieces:
 
 - Linear-scan path for short pieces (tiktoken's `byte_pair_merge`: rank list,
@@ -75,9 +103,17 @@ Done afterwards: a piece that is itself a token is looked up first, as tiktoken 
 token that is a whole piece encodes like tiktoken, and hypothesis plus ~5.9M tokens of
 ~14k random trained vocabularies found no token whose own bytes BPE to anything else
 (no trained vocabulary had two tokens with the same bytes either). Cold encode,
-interleaved, best of 7, GC off: regular 1.18x, unicode_all 0.98x, low_rep 0.99x. With
-GC on, unicode_all varied 0.93-0.95x: the lookup itself is ~4 ms of it, the rest is
-when full collections run.
+interleaved in one process, best of 7, GC off: regular 1.18x, unicode_all 0.98x,
+low_rep 0.99x; with GC on, unicode_all 0.93-0.95x.
+
+Re-measured (2026-10-29, same run as finding #8 above, variant `no_whole`; one
+process per measurement): cold regular 1.17x, specials 1.10x, corpus documents of the
+stream 1.17-1.20x (whole stream 1.03x). Costs one lookup per distinct piece: cold
+unicode_all 0.97x, base64, cjk, emoji, whitespace, dna and low_rep 0.99x; warm
+unchanged (0.99-1.01x) except on the cache-cliff inputs (unicode_all 0.97x, low_rep
+and base64 0.99x). With GC on (`--gc`, regular, unicode_all, low_rep, specials):
+unicode_all 0.97x cold and warm, the rest as with GC off. The earlier 0.93-0.95x was
+measured in one process, variants one after the other, and does not reproduce.
 
 ## Overlapping special tokens: tiktoken is no oracle
 
@@ -206,11 +242,10 @@ now runs every (input, variant) pair in its own process, rotating the variant or
 each repetition; pyperf was not used because it runs all processes of one benchmark
 before the next, so variants are not interleaved and drift enters the comparison.
 
-**To re-check**: earlier gains of ~10% or less measured with several variants or
-tokenizers in one process may be affected the same way, e.g. finding #8 (1.12-1.18x
-cold encode, pytest-benchmark in one session) and the whole-piece lookup (cold encode
-interleaved in one process, 0.93-1.18x). Re-measure them with one process per
-measurement before relying on them.
+Re-checked (2026-10-29): finding #8 and the whole-piece lookup, both measured in one
+process before, hold when measured one process per measurement (numbers in their
+sections above). Noise on this machine, from the `master_copy` control: 0.99-1.01x
+with GC off, up to 1.03x on one input with GC on.
 
 ## Next: inline the cache lookup in `encode`
 
@@ -219,3 +254,12 @@ Every piece costs a Python method call to `_encode_piece` even on a hit. A per-i
 LRU bookkeeping, which points at that call (measured in one process with one other
 variant, so subject to the caveat above). Measure `cache.get(piece)` inline in the
 `encode` loop, calling `_encode_piece` only on a miss, with `scripts/time_variants.py`.
+
+## Release preparation (not started)
+
+- Add `src/fastbpe/py.typed` (PEP 561) and check that the built wheel contains it.
+  Without it, mypy run on code outside `src` (e.g. `uv run mypy --strict
+  scripts/time_variants.py`) skips `fastbpe` as untyped (`import-untyped`), so
+  subclasses of `Tokenizer` are checked against `Any`.
+- Decide whether CI also runs mypy on `scripts/` and `tests/` (not necessarily
+  `--strict`); today only `src` is checked.
