@@ -4,3 +4,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # This project's dependencies are all dev dependencies (pyproject.toml, uv.lock);
+  # the package itself has none at runtime.
+  # A tiktoken bump that changes the pinned differences fails
+  # tests/test_tiktoken_differences.py; update README.md with it.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
