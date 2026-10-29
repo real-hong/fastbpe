@@ -233,3 +233,28 @@ def test_special_pattern_cache_is_bounded(small_corpus: str) -> None:
     # The first subset was evicted long ago and is compiled again, still correctly.
     first = specials[0]
     assert tok.encode(first, allowed_special={first}) == [tok.special_tokens[first]]
+
+
+def test_special_patterns_are_compiled_once_on_first_use(
+    specials_tokenizer: Tokenizer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    compiled: list[frozenset[str]] = []
+    original = tokenizer_module.special_token_pattern
+
+    def counting(tokens: frozenset[str]) -> object:
+        compiled.append(tokens)
+        return original(tokens)
+
+    monkeypatch.setattr(tokenizer_module, "special_token_pattern", counting)
+    tok = fresh(specials_tokenizer)
+    assert compiled == []  # nothing at construction
+    expected = fresh(specials_tokenizer)
+    for _ in range(3):
+        for allowed in ("all", {"<|a|>"}):
+            assert tok.encode(MIXED, allowed_special=allowed) == expected.encode(
+                MIXED, allowed_special=allowed
+            )
+    # One compile for each of tok and expected, per subset.
+    assert sorted(map(sorted, compiled)) == sorted(
+        [sorted(SPECIALS), sorted(SPECIALS), ["<|a|>"], ["<|a|>"]]
+    )

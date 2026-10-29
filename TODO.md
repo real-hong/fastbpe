@@ -16,14 +16,25 @@ change could actually remove (see the lesson under the rejected item below):
 - **Training on adversarial input is the merges**: 87% (base64), 91% (minified), 98%
   (CJK, 1.1 s at vocab 1000), ~100% (DNA). Not profiled yet; nothing is known about
   what is removable. Profile CJK first.
-- **Many short chunks** (50 special tokens, a chunk every ~16 chars, 62,581 chunks):
-  `count_pretokens` 117 ms vs 53 ms on the plain corpus of the same size. Per chunk,
-  `pretokenize` costs 74 ms vs 35 ms (translate, findall and two checks per call), and
-  `_count`'s per-text `Counter.update` with a generator ~22 ms (one generator over all
-  chunks: 96 ms). Removable: about those 22 ms, plus part of the ~39 ms per-call
-  overhead in `pretokenize`.
+- **Many short chunks**: fixed cost per chunk, see its own item below.
 - Warm encode on the corpus is 68% `pretokenize` (38 of 55 ms); the rest is cache
   lookups and `list.extend`, little to remove.
+
+## Many short chunks: fixed cost per chunk in `count_pretokens`
+
+Text with many special tokens is cut into many short chunks, and each chunk pays fixed
+costs. 50 special tokens, one every ~16 chars (1 MB, 62,581 chunks): `count_pretokens`
+117 ms vs 53 ms on the plain 1 MB corpus. Of that:
+
+- `pretokenize` per call (translate, findall, two length checks): 74 ms over the chunks
+  vs 35 ms on the plain corpus, so ~39 ms of per-call overhead.
+- `_count` calls `Counter.update` with a new generator per chunk: ~22 ms (one generator
+  over all chunks: 96 ms instead of 117 ms).
+
+Removable: about the 22 ms in `_count`, plus part of the ~39 ms, e.g. by pre-tokenizing
+several chunks per call. Check that the gain holds on the plain corpus and the
+adversarial inputs too (few long chunks must not get slower), and keep
+`tests/test_count.py` passing.
 
 ## Rejected: count `str` pieces, encode only the distinct keys
 

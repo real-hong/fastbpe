@@ -16,7 +16,7 @@ from fastbpe.train import train_bpe
 # Encoded pieces kept per tokenizer; the cache is simply emptied when it fills up.
 CACHE_SIZE = 100_000
 # Special-token patterns kept per tokenizer for subsets of its special tokens passed as
-# allowed_special; "all" has its own, compiled at construction.
+# allowed_special; "all" has its own slot.
 SPECIAL_CACHE_SIZE = 16
 
 # The allowed special tokens and the pattern that splits text around them.
@@ -75,9 +75,10 @@ class Tokenizer:
         self._cache: dict[str, list[int]] = {}
 
         # Building the pattern escapes and joins every special token, which with many of
-        # them costs far more than encoding a short text; so it is done once per subset.
-        all_special = frozenset(self._special_tokens)
-        self._all_special: _SpecialSplit = (all_special, special_token_pattern(all_special))
+        # them costs far more than encoding a short text; so it is done once per subset,
+        # on first use (compiling 1000 tokens takes ~8 ms, too much for construction).
+        self._all_special = frozenset(self._special_tokens)
+        self._all_split: _SpecialSplit | None = None
         self._special_cache: dict[frozenset[str], _SpecialSplit] = {}
 
     @classmethod
@@ -125,7 +126,7 @@ class Tokenizer:
     ) -> list[int]:
         """Encode ``text``; special tokens outside ``allowed_special`` are plain text."""
         if allowed_special == "all":
-            allowed, pattern = self._all_special
+            allowed, pattern = self._all_split or self._compile_all_split()
         elif isinstance(allowed_special, AbstractSet):
             allowed, pattern = self._special_split(allowed_special)
         else:
@@ -145,12 +146,19 @@ class Tokenizer:
                 ids.extend(self._encode_piece(piece))
         return ids
 
+    def _compile_all_split(self) -> _SpecialSplit:
+        # Threads encoding concurrently may each compile it the first time (without the
+        # GIL, on free-threaded builds); the patterns are equal and one of them is kept.
+        split = (self._all_special, special_token_pattern(self._all_special))
+        self._all_split = split
+        return split
+
     def _special_split(self, allowed_special: AbstractSet[str]) -> _SpecialSplit:
         # The caller may change its set between calls, so the key is rebuilt every time:
         # O(min(len(allowed_special), number of special tokens)) for a set or frozenset,
         # which frozenset.intersection iterates from the smaller side. Unknown strings
         # drop out, so subsets that differ only in those share an entry.
-        allowed = self._all_special[0].intersection(allowed_special)
+        allowed = self._all_special.intersection(allowed_special)
         split = self._special_cache.get(allowed)
         if split is None:
             split = (allowed, special_token_pattern(allowed))
