@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - run: uv sync --locked
+      - run: uv run ruff check
+      - run: uv run ruff format --check
+      - run: uv run mypy --strict src
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # pyproject: requires-python = ">=3.12"
+        python-version: ["3.12", "3.13", "3.14"]
+    env:
+      HYPOTHESIS_PROFILE: ci
+      TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.tiktoken-cache
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked
+      # tiktoken downloads the gpt2 ranks on first use; keep them between runs.
+      - uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.tiktoken-cache
+          key: tiktoken-gpt2
+      - run: uv run pytest --runslow
