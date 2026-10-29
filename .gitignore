@@ -6,8 +6,9 @@ dist/
 wheels/
 *.egg-info
 
-# Virtual environments
+# Virtual environments (.venv-3.14t etc.: other interpreters, see CLAUDE.md)
 .venv
+.venv-*/
 
 # Tooling artifacts
 .coverage

@@ -14,6 +14,9 @@ cache is full it is emptied. A larger cache pays off for text with many distinct
 pieces (code, base64, many scripts) that is encoded again; on input with far more
 distinct pieces than the cache holds it gains little. `cache_size=0` disables the
 cache. A tokenizer may be shared between threads, including on free-threaded Python.
+The cache takes no lock, so with threads its limit is approximate: threads that miss at
+the same time may each add an entry after the size check, so it can exceed
+`cache_size` by at most one entry per thread.
 
 ## Known differences from tiktoken
 

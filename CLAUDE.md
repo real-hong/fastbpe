@@ -13,6 +13,10 @@
 - 覆盖率：`uv run pytest --cov=fastbpe --cov-report=term-missing`
 - 基准：`uv run pytest benchmarks/ --benchmark-only`
 - 性能剖析：`uv run python -m cProfile -s cumtime scripts/profile_train.py`
+- free-threaded 测试（CI 矩阵含 3.14t）：
+  `UV_PROJECT_ENVIRONMENT=.venv-3.14t uv run --python 3.14t pytest -q`。
+  必须用 `UV_PROJECT_ENVIRONMENT` 指向独立目录：直接 `uv run --python 3.14t` 会把项目的
+  主 `.venv` 重建成 3.14t。`.venv-*/` 已在 `.gitignore` 中。
 - pre-push 钩子：克隆后执行一次 `uv run pre-commit install`，之后每次推送前自动跑快速测试
   （`uv run pytest -q`，不含 `--runslow`）；完整测试由 CI 跑。
 
