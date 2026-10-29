@@ -10,6 +10,21 @@ settings.register_profile("default", max_examples=100, deadline=None)
 settings.register_profile("ci", max_examples=1000, deadline=None)
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "default"))
 
+
+# Slow tests are opt-in, as in the pytest docs: CI passes --runslow.
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption("--runslow", action="store_true", default=False, help="run slow tests")
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    if config.getoption("--runslow"):
+        return
+    skip_slow = pytest.mark.skip(reason="needs --runslow")
+    for item in items:
+        if "slow" in item.keywords:
+            item.add_marker(skip_slow)
+
+
 EOT = "<|endoftext|>"
 
 SMALL_CORPUS = """\
@@ -36,6 +51,9 @@ def gpt2() -> tiktoken.Encoding:
     try:
         return tiktoken.get_encoding("gpt2")
     except Exception as exc:  # e.g. offline on the first run, before the data is cached
+        # CI sets FASTBPE_REQUIRE_ORACLE so that a failed download cannot pass as skips.
+        if os.environ.get("FASTBPE_REQUIRE_ORACLE"):
+            pytest.fail(f"tiktoken gpt2 encoding unavailable: {exc}")
         pytest.skip(f"tiktoken gpt2 encoding unavailable: {exc}")
 
 

@@ -5,7 +5,7 @@ import re
 import unicodedata
 import warnings
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from concurrent.futures import Executor, ProcessPoolExecutor
 from multiprocessing.context import BaseContext
 
@@ -18,7 +18,28 @@ GPT2_PATTERN = (
     r"""'(?:[sdmt]|ll|ve|re)| ?\p{L}++| ?\p{N}++| ?[^\s\p{L}\p{N}]++|\s++$|\s+(?!\S)|\s"""
 )
 
-_CONTRACTIONS = ("s", "d", "m", "t", "ll", "ve", "re")
+# Fast path: ``pretokenize`` maps every character to an ASCII representative of its class
+# with ``str.translate`` and runs an ASCII version of the pattern with ``re``, which only
+# knows ASCII classes but is far faster than classifying characters in Python.
+#
+# This relies on what the GPT-2 pattern can tell apart, and on nothing else:
+# - letters, numbers, whitespace and everything else, never which letter or number:
+#   numbers are not split into groups of digits, and no class depends on case;
+# - the characters it names literally: ``'``, the lowercase contraction letters
+#   ``sdmtlvre`` (contractions are case-sensitive) and U+0020 (the ``" ?"`` prefix);
+# - whitespace is one class: newlines are not told apart from other whitespace.
+# Patterns that see more, such as cl100k's case-insensitive contractions or its
+# ``[\r\n]`` classes, would need other representatives, so ``_compile_mapped`` accepts
+# only the patterns listed in ``_ASCII_PATTERNS``, each checked against this mapping.
+_LITERAL = frozenset("'sdmtlvre ")
+
+_ASCII_PATTERNS = {
+    # \p{L} -> [a-zA-Z], \p{N} -> [0-9]; $ -> \Z, which is what \s++$ amounts to (the
+    # possessive \s++ has already taken any final newline).
+    GPT2_PATTERN: (
+        r"""'(?:[sdmt]|ll|ve|re)| ?[a-zA-Z]++| ?[0-9]++| ?[^\sa-zA-Z0-9]++|\s++\Z|\s+(?!\S)|\s"""
+    ),
+}
 
 
 def _is_space(char: str) -> bool:
@@ -35,50 +56,65 @@ def _is_number(char: str) -> bool:
     return unicodedata.category(char).startswith("N")
 
 
-def _is_other(char: str) -> bool:
-    return not (_is_space(char) or _is_letter(char) or _is_number(char))
+def _representative(char: str) -> str:
+    """The single ASCII character that stands for ``char`` in the ASCII pattern."""
+    if char in _LITERAL:
+        return char
+    if _is_space(char):
+        return "\t"  # not " ": only U+0020 itself may match the optional leading space
+    if _is_letter(char):
+        return "a"
+    if _is_number(char):
+        return "0"
+    return "!"
 
 
-def _run_end(text: str, start: int, predicate: Callable[[str], bool]) -> int:
-    end = start
-    while end < len(text) and predicate(text[end]):
-        end += 1
-    return end
+class _RepresentativeTable(dict[int, str]):
+    """``str.translate`` table from code point to representative, filled on first use.
+
+    Classifying all 0x110000 code points at import would take about 0.9 s; text uses few
+    of them, and each is classified once, the first time it is seen.
+    """
+
+    def __missing__(self, code_point: int) -> str:
+        representative = self[code_point] = _representative(chr(code_point))
+        return representative
 
 
-def _piece_end(text: str, i: int) -> int:
-    """Return where the piece starting at ``i`` ends, trying the pattern's alternatives in order."""
-    # '(?:[sdmt]|ll|ve|re)
-    if text[i] == "'":
-        for suffix in _CONTRACTIONS:
-            if text.startswith(suffix, i + 1):
-                return i + 1 + len(suffix)
+def _compile_mapped(pattern: str) -> re.Pattern[str]:
+    """Compile the ASCII version of ``pattern`` that runs on representatives."""
+    try:
+        ascii_pattern = _ASCII_PATTERNS[pattern]
+    except KeyError:
+        raise ValueError(
+            "the category-map fast path only supports GPT2_PATTERN; other patterns may "
+            "tell apart characters that share a representative"
+        ) from None
+    return re.compile(ascii_pattern, re.ASCII)
 
-    # ` ?\p{L}++`, ` ?\p{N}++`, ` ?[^\s\p{L}\p{N}]++`. Without the optional space none of
-    # these can match at a space, so trying only the with-space variant is enough.
-    start = i + 1 if text[i] == " " else i
-    for predicate in (_is_letter, _is_number, _is_other):
-        end = _run_end(text, start, predicate)
-        if end > start:
-            return end
 
-    # What is left starts with whitespace.
-    end = _run_end(text, i, _is_space)
-    if end == len(text):  # \s++$
-        return end
-    if end - i > 1:  # \s+(?!\S): leave the last whitespace char to lead the next piece
-        return end - 1
-    return i + 1  # \s
+_TABLE = _RepresentativeTable()
+_SPLIT = _compile_mapped(GPT2_PATTERN)
 
 
 def pretokenize(text: str) -> list[str]:
-    """Split ``text`` exactly as ``regex.findall(GPT2_PATTERN, text)`` would."""
+    """Split ``text`` exactly as ``regex.findall(GPT2_PATTERN, text)`` would.
+
+    The pattern runs on the representatives of ``text``'s characters. Each character
+    maps to one character, so a match of length ``n`` in the mapped text is the next
+    ``n`` characters of ``text``.
+    """
+    mapped = text.translate(_TABLE)
+    if len(mapped) != len(text):
+        raise RuntimeError("character table must map each character to one character")
     pieces = []
-    i = 0
-    while i < len(text):
-        end = _piece_end(text, i)
-        pieces.append(text[i:end])
-        i = end
+    start = 0
+    for match in _SPLIT.findall(mapped):
+        end = start + len(match)
+        pieces.append(text[start:end])
+        start = end
+    if start != len(text):
+        raise RuntimeError("pattern matches must cover the whole text")
     return pieces
 
 

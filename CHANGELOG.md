@@ -17,6 +17,22 @@
   needs only ~log2(n) merges, each touching most nodes. Run-length compression of
   repeated bytes would address it; not done.
 
+### Pre-tokenization
+
+- `pretokenize` maps each character to an ASCII representative of its class (letter,
+  number, whitespace, other; `'`, `sdmtlvre` and U+0020 stay themselves) with
+  `str.translate` and runs an ASCII form of the GPT-2 pattern with `re`, instead of
+  classifying characters one by one in Python. The map is filled lazily from
+  `unicodedata` (building it for all code points at import would take ~0.9 s). Output
+  is unchanged: differential tests against the old implementation (kept in
+  `tests/reference_pretokenize.py`) on random Unicode and on every code point.
+  1 MB corpus: pre-tokenization 4.9x, training (vocab 1000) 2.1x, encoding 2.6x cold
+  and 3.6x warm. Adversarial inputs: 2.7x-4.8x for pre-tokenization alone; least with
+  many distinct code points (all-plane Unicode 2.7x, 1.4x on the first call while the
+  map fills) and with many tiny chunks (special token every ~16 chars: 2.8x).
+- The fast path is valid only for the GPT-2 pattern: the map erases case, which
+  letter or digit, and newline vs. other whitespace. Other patterns are rejected.
+
 ### Parallel pre-tokenization
 
 - Parallel pre-tokenization is **opt-in**: `train_bpe`, `Tokenizer.train` and
