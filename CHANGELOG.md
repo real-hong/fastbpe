@@ -65,6 +65,12 @@
   GC off and 0.93-0.95x with GC on (TODO.md); both were measured in one process,
   variants one after the other, which biased them, and re-measure as 0.97x.
 
+- `encode` looks cached pieces up itself instead of calling a method per piece; only
+  a miss calls `Tokenizer._encode_miss` (formerly `_encode_piece`). Warm encode of
+  1 MB, one process per measurement: regular 1.08x, high_rep 1.11x, minified 1.09x,
+  emoji and 50 special tokens 1.04x; cold regular 1.05x; inputs that nearly always
+  miss the cache (base64, low_rep, unicode_all, dna) unchanged (1.00-1.01x).
+
 - `Tokenizer(..., cache_size=...)` (also on `train`, `from_ranks` and `load`) sets how
   many encoded pieces a tokenizer keeps; the default stays 100,000 (~15-22 MB at
   ~150-220 bytes per entry). `0` disables the cache; a negative size raises

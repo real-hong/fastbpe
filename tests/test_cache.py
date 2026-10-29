@@ -35,6 +35,39 @@ def test_cache_stays_within_size(small_tokenizer: Tokenizer, size: int) -> None:
         assert tok.encode(WORDS) == expected
 
 
+def test_cached_pieces_are_not_encoded_again(
+    small_tokenizer: Tokenizer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Both sides of the hit/miss conditional expression in encode, which branch
+    # coverage does not measure.
+    tok = fresh(small_tokenizer)
+    expected = tok.encode(WORDS)
+    misses: list[str] = []
+    encode_miss = tok._encode_miss
+
+    def counting(piece: str) -> list[int]:
+        misses.append(piece)
+        return encode_miss(piece)
+
+    monkeypatch.setattr(tok, "_encode_miss", counting)
+    assert tok.encode(WORDS) == expected
+    assert misses == []
+    assert tok.encode(WORDS + " unseen") == [*expected, *fresh(tok).encode(" unseen")]
+    assert misses == [" unseen"]
+
+
+def test_full_cache_is_emptied_in_place(small_tokenizer: Tokenizer) -> None:
+    # encode binds the cache's get once per call, which is only right while the dict
+    # is never replaced, also when one encode call fills it several times.
+    expected = fresh(small_tokenizer).encode(WORDS)
+    tok = fresh(small_tokenizer, cache_size=5)
+    cache = tok._cache
+    for _ in range(2):
+        assert tok.encode(WORDS) == expected
+        assert tok._cache is cache
+        assert 0 < len(cache) <= 5
+
+
 def test_cache_size_zero_disables_the_cache(small_tokenizer: Tokenizer) -> None:
     expected = fresh(small_tokenizer).encode(WORDS)
     tok = fresh(small_tokenizer, cache_size=0)
