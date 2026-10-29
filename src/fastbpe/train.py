@@ -1,21 +1,25 @@
 """Byte-level BPE training with incremental pair-count updates.
 
-Pair counts are kept up to date across rounds, and an inverted index from each pair to
-the words containing it means a merge only rewrites the words it actually touches. The
-most frequent pair comes from a max-heap with lazy deletion: changed counts are pushed as
-new entries and outdated entries are skipped when popped.
+All words are stored as one doubly linked list of tokens (word boundaries end the
+links), with an index from each pair to the nodes where it starts. Merging a pair
+visits only its occurrences and updates the pairs next to each one, so a round costs
+O(k log k) for k occurrences, independent of word length. The most frequent pair comes
+from a max-heap with lazy deletion: a pair is pushed again only when a round changed its
+count, and the heap is rebuilt when outdated entries outnumber live pairs 2 to 1.
 """
 
 import heapq
-from collections import defaultdict
+from array import array
 from collections.abc import Mapping, Sequence
-from itertools import pairwise
 from multiprocessing.context import BaseContext
 
 from fastbpe.pretokenize import count_pretokens, split_on_special_tokens
 
-Word = tuple[bytes, ...]
 Pair = tuple[bytes, bytes]
+
+_BYTES = [bytes([b]) for b in range(256)]
+_DEAD = b""  # token of a node absorbed into its left neighbour; equals no real token
+_NONE = -1  # prev/next link past either end of a word
 
 
 class _Candidate:
@@ -33,69 +37,116 @@ class _Candidate:
 
 
 class _PairStats:
-    """Pair frequencies over a set of weighted words, which words hold each pair, and a
-    heap to find the most frequent pair."""
+    """Words as linked token lists, pair counts, pair positions and the candidate heap.
+
+    Invariants between merges (checked by tests/test_train_internals.py):
+    ``counts`` holds exactly the pairs adjacent somewhere, each with the summed weight
+    of its occurrences (overlaps included: aaa holds (a, a) twice), never 0;
+    ``positions[pair]`` is the set of nodes where it starts; every pair in ``counts``
+    has a heap entry with its current count.
+    """
 
     def __init__(self) -> None:
         self.counts: dict[Pair, int] = {}
-        self.words: defaultdict[Pair, set[int]] = defaultdict(set)
+        self.positions: dict[Pair, set[int]] = {}
+        self.tokens: list[bytes] = []
+        # Machine-int arrays: a list would hold one int object per link (~25% more peak
+        # memory on long words) for no measurable speed gain.
+        self.prev = array("q")
+        self.next = array("q")
+        self.weight = array("q")  # count of the word the node belongs to
         self._heap: list[_Candidate] = []
-        self._changed: set[Pair] = set()
 
-    def add(self, index: int, word: Word, count: int) -> None:
-        for pair in pairwise(word):
-            self.counts[pair] = self.counts.get(pair, 0) + count
-            self.words[pair].add(index)
-            self._changed.add(pair)
-
-    def remove(self, index: int, word: Word, count: int) -> None:
-        for pair in pairwise(word):
-            self.counts[pair] -= count
-            self._changed.add(pair)
-            if self.counts[pair] == 0:
-                del self.counts[pair]
-            holders = self.words.get(pair)
-            if holders is not None:
-                holders.discard(index)
-                if not holders:
-                    del self.words[pair]
+    def add_words(self, piece_counts: Mapping[bytes, int]) -> None:
+        tokens, prev, next_, weight = self.tokens, self.prev, self.next, self.weight
+        counts, positions = self.counts, self.positions
+        for piece, count in piece_counts.items():
+            start, end = len(tokens), len(tokens) + len(piece)
+            tokens.extend([_BYTES[b] for b in piece])
+            prev.append(_NONE)
+            prev.extend(range(start, end - 1))
+            next_.extend(range(start + 1, end))
+            next_.append(_NONE)
+            weight.extend([count] * len(piece))
+            for node in range(start, end - 1):
+                pair = (tokens[node], tokens[node + 1])
+                counts[pair] = counts.get(pair, 0) + count
+                positions.setdefault(pair, set()).add(node)
+        self._heap = [_Candidate(count, pair) for pair, count in counts.items()]
+        heapq.heapify(self._heap)
 
     def pop_best(self) -> Pair | None:
         """Return the most frequent pair (ties: the larger pair), or None if none is left."""
-        # One entry per pair changed since the last call, rather than one per change.
-        for pair in self._changed:
-            if pair in self.counts:
-                heapq.heappush(self._heap, _Candidate(self.counts[pair], pair))
-        self._changed.clear()
         while self._heap:
             top = heapq.heappop(self._heap)
             if self.counts.get(top.pair) == top.count:
                 return top.pair
         return None
 
-
-def _merge_word(word: Word, pair: Pair) -> Word:
-    merged: list[bytes] = []
-    i = 0
-    while i < len(word):
-        if i + 1 < len(word) and (word[i], word[i + 1]) == pair:
-            merged.append(word[i] + word[i + 1])
-            i += 2
+    def _sub(self, pair: Pair, node: int, weight: int, changed: dict[Pair, int]) -> None:
+        count = self.counts[pair] - weight
+        if count:
+            self.counts[pair] = count
         else:
-            merged.append(word[i])
-            i += 1
-    return tuple(merged)
+            del self.counts[pair]
+        holders = self.positions.get(pair)  # None for the pair being merged (popped)
+        if holders is not None:
+            holders.discard(node)
+            if not holders:
+                del self.positions[pair]
+        changed[pair] = changed.get(pair, 0) - weight
+
+    def _add(self, pair: Pair, node: int, weight: int, changed: dict[Pair, int]) -> None:
+        self.counts[pair] = self.counts.get(pair, 0) + weight
+        self.positions.setdefault(pair, set()).add(node)
+        changed[pair] = changed.get(pair, 0) + weight
+
+    def merge(self, best: Pair) -> None:
+        """Merge every occurrence of ``best``, left to right within each word.
+
+        At each occurrence x A B y -> x AB y, only (x, A), (A, B) and (B, y) lose one
+        occurrence and (x, AB) and (AB, y) gain one.
+        """
+        left, right = best
+        new = left + right
+        tokens, prev, next_, weight = self.tokens, self.prev, self.next, self.weight
+        changed: dict[Pair, int] = {}
+        # Node ids grow left to right within a word, so sorting merges overlapping
+        # occurrences leftmost first: aaa -> (aa) a, aaaa -> (aa) (aa).
+        for i in sorted(self.positions.pop(best)):
+            # Absorbed by the previous occurrence in this loop (the middle a of aaa).
+            if tokens[i] != left:
+                continue
+            j = next_[i]
+            w = weight[i]
+            x, y = prev[i], next_[j]
+            if x != _NONE:
+                self._sub((tokens[x], left), x, w, changed)
+                self._add((tokens[x], new), x, w, changed)
+            self._sub(best, i, w, changed)
+            if y != _NONE:
+                self._sub((right, tokens[y]), j, w, changed)
+                self._add((new, tokens[y]), i, w, changed)
+                prev[y] = i
+            tokens[i] = new
+            tokens[j] = _DEAD
+            next_[i] = y
+
+        counts, heap = self.counts, self._heap
+        for pair, delta in changed.items():
+            if delta and pair in counts:
+                heapq.heappush(heap, _Candidate(counts[pair], pair))
+        # Bound the heap: rebuild once outdated entries outnumber live pairs 2 to 1.
+        # Rebuilding costs O(live pairs), so it stays amortised O(1) per push.
+        if len(heap) > 3 * len(counts):
+            self._heap = [_Candidate(count, pair) for pair, count in counts.items()]
+            heapq.heapify(self._heap)
 
 
 def _train_merges(piece_counts: Mapping[bytes, int], n_merges: int) -> list[Pair]:
     """Up to ``n_merges`` merges learned from pre-token byte strings and their counts."""
-    words: list[Word] = [tuple(bytes([b]) for b in piece) for piece in piece_counts]
-    word_counts = list(piece_counts.values())
-
     stats = _PairStats()
-    for index, word in enumerate(words):
-        stats.add(index, word, word_counts[index])
-
+    stats.add_words(piece_counts)
     merges: list[Pair] = []
     merged_pairs: set[Pair] = set()
     while len(merges) < n_merges and (best := stats.pop_best()) is not None:
@@ -104,12 +155,7 @@ def _train_merges(piece_counts: Mapping[bytes, int], n_merges: int) -> list[Pair
         if best not in merged_pairs:
             merged_pairs.add(best)
             merges.append(best)
-        # Merging every occurrence left to right leaves no `best` pair behind, so its
-        # index entry can go; remove() skips pairs that are no longer indexed.
-        for index in stats.words.pop(best):
-            stats.remove(index, words[index], word_counts[index])
-            words[index] = _merge_word(words[index], best)
-            stats.add(index, words[index], word_counts[index])
+        stats.merge(best)
     return merges
 
 

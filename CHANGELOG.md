@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Training
+
+- Merges update only the pairs next to each occurrence (words are linked token lists
+  with a pair → position index), so a round costs O(k log k) for k occurrences instead
+  of rewriting every word that holds the pair. Only pairs whose count changed are
+  pushed, and the heap is rebuilt when dead entries outnumber live pairs 2 to 1.
+  Long words without spaces (DNA, 160k chars): 8.47 s → 0.219 s (38.7x), peak memory
+  157.8 → 19.6 MiB; 1 MB corpus: 1.36x (vocab 1000) and 1.46x (vocab 5000) faster.
+  Output is unchanged (hypothesis oracle against the naive trainer).
+- Known trade-off: a single run of one repeated byte (`"a" * n`) trains ~1.6x slower
+  (160k chars: 0.124 s → 0.204 s) and long single words take more peak memory than
+  before (`"a" * 160k`: 6.7 → 22.0 MiB), since every byte is a list node. Such input
+  needs only ~log2(n) merges, each touching most nodes. Run-length compression of
+  repeated bytes would address it; not done.
+
 ### Parallel pre-tokenization
 
 - Parallel pre-tokenization is **opt-in**: `train_bpe`, `Tokenizer.train` and
