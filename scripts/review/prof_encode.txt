@@ -1,0 +1,30 @@
+         12364504 function calls (12363122 primitive calls) in 2.368 seconds
+
+   Ordered by: internal time
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+   503838    0.350    0.000    1.091    0.000 pretokenize.py:39(_run_end)
+    60851    0.234    0.000    0.592    0.000 encode.py:6(bpe_parts)
+   960908    0.221    0.000    0.358    0.000 pretokenize.py:27(_is_letter)
+   697683    0.170    0.000    0.288    0.000 encode.py:21(push)
+1867497/1867391    0.113    0.000    0.113    0.000 {built-in method builtins.len}
+   240160    0.102    0.000    1.197    0.000 pretokenize.py:46(_piece_end)
+   938325    0.098    0.000    0.098    0.000 {method 'get' of 'dict' objects}
+   150257    0.091    0.000    0.141    0.000 load.py:112(decode_data_gym)
+  1248864    0.090    0.000    0.090    0.000 {method 'startswith' of 'str' objects}
+       54    0.089    0.002    1.319    0.024 pretokenize.py:71(pretokenize)
+   499010    0.087    0.000    0.120    0.000 pretokenize.py:21(_is_space)
+  1224821    0.086    0.000    0.086    0.000 {built-in method unicodedata.category}
+   238664    0.078    0.000    0.247    0.000 pretokenize.py:35(_is_other)
+   263913    0.062    0.000    0.100    0.000 pretokenize.py:31(_is_number)
+   523747    0.055    0.000    0.055    0.000 {built-in method _heapq.heappop}
+        1    0.054    0.054    1.583    1.583 tokenizer.py:89(encode)
+   791642    0.049    0.000    0.049    0.000 load.py:113(<genexpr>)
+   523747    0.044    0.000    0.044    0.000 {built-in method _heapq.heappush}
+   240160    0.040    0.000    0.189    0.000 tokenizer.py:107(_encode_piece)
+        1    0.038    0.038    0.199    0.199 load.py:89(data_gym_to_mergeable_bpe_ranks)
+   499010    0.034    0.000    0.034    0.000 {method 'isspace' of 'str' objects}
+        1    0.033    0.033    0.523    0.523 tokenizer.py:18(_recover_merges)
+   414825    0.033    0.000    0.033    0.000 {method 'append' of 'list' objects}
+   240227    0.021    0.000    0.021    0.000 {method 'extend' of 'list' objects}
+        1    0.009    0.009    0.009    0.009 core.py:17(__init__)
