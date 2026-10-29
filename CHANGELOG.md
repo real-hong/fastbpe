@@ -102,6 +102,12 @@
 - Corrected: TODO.md and a test comment from PR #4 said tiktoken's choice among
   overlapping special tokens depends on their ids. It depends only on the token
   strings (README, "Known differences from tiktoken").
+- The known differences from tiktoken in the README are pinned by
+  `tests/test_tiktoken_differences.py`. Writing it showed that the `Cn` difference is
+  gone on Python 3.14, whose `unicodedata` is Unicode 16.0; the README now says so.
+- A Claude Code PreToolUse hook (`.claude/settings.json`) blocks Bash pipelines
+  without `pipefail`; CLAUDE.md requires claims about external libraries to be
+  backed by committed, repeatable tests or scripts.
 
 ### Fixes
 

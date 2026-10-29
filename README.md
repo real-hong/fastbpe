@@ -15,15 +15,22 @@ checks this against tiktoken's `gpt2` encoding.
   special, as in fastbpe, but `"ab"` encodes to the special token `"a"` followed by
   the byte `b` when `"a"` is also special. The same happens with `"<|a|>"` and
   `"<|a|><|b|>"`. The two agree whenever no special token is a prefix of another.
+  Pinned by `tests/test_tiktoken_differences.py` (seven pairs, every id assignment
+  and order) and `test_overlapping_special_tokens_use_longest_match`.
 - **Code points unassigned in Python's Unicode database.** Pre-tokenization classifies
-  characters with the standard library's `unicodedata` (Unicode 15.1 on Python 3.13).
-  tiktoken uses the `regex` crate's newer tables. A code point assigned after 15.1
-  (for example U+13460, Egyptian Hieroglyphs Extended-A, Unicode 16.0) is a letter to
-  tiktoken but category `Cn` (unassigned) here, so text containing such code points
-  can split into different pieces. All assigned code points match; the oracle tests
-  exclude `Cn`.
+  characters with the standard library's `unicodedata`: Unicode 15.0 on Python 3.12,
+  15.1 on 3.13, 16.0 on 3.14. tiktoken's tables know newer code points. On 3.12 and
+  3.13, a code point assigned in Unicode 16.0 (for example U+13460, Egyptian
+  Hieroglyphs Extended-A) is a letter to tiktoken but category `Cn` (unassigned) here,
+  so text containing it can split into different pieces, and with some vocabularies
+  into different ids. On 3.14 that code point matches; code points newer than the
+  running Python's Unicode version would differ the same way. All code points the
+  running Python knows match (`tests/test_oracle.py`, which excludes `Cn`). Pinned by
+  `tests/test_tiktoken_differences.py`, which expects the difference below Unicode 16.0
+  and none from 16.0 on.
 
 Not a difference: a special token may have the same bytes as a regular token, for
 example the single-byte special token `"a"`. As in tiktoken, both ids are kept, and
-`allowed_special` decides which one the text encodes to. `train_bpe` warns about
-single-byte special tokens because that byte never takes part in merges.
+`allowed_special` decides which one the text encodes to (`tests/test_tiktoken_differences.py`,
+`tests/test_vocab_invariants.py`). `train_bpe` warns about single-byte special tokens
+because that byte never takes part in merges (`tests/test_train.py`).
