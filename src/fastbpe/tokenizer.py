@@ -1,6 +1,7 @@
 """Public tokenizer API: encoding, decoding, special tokens and serialization."""
 
 import json
+import re
 from collections.abc import Iterable, Sequence
 from collections.abc import Set as AbstractSet
 from multiprocessing.context import BaseContext
@@ -9,11 +10,17 @@ from pathlib import Path
 from typing import Literal, Self
 
 from fastbpe.encode import bpe_parts, encode_bytes
-from fastbpe.pretokenize import pretokenize, split_on_special_tokens
+from fastbpe.pretokenize import pretokenize, special_token_pattern
 from fastbpe.train import train_bpe
 
 # Encoded pieces kept per tokenizer; the cache is simply emptied when it fills up.
 CACHE_SIZE = 100_000
+# Special-token patterns kept per tokenizer for subsets of its special tokens passed as
+# allowed_special; "all" has its own, compiled at construction.
+SPECIAL_CACHE_SIZE = 16
+
+# The allowed special tokens and the pattern that splits text around them.
+_SpecialSplit = tuple[frozenset[str], re.Pattern[str] | None]
 
 
 def _recover_merges(ranks: dict[bytes, int]) -> list[tuple[bytes, bytes]]:
@@ -67,6 +74,12 @@ class Tokenizer:
                 self._ranks.setdefault(token, token_id)
         self._cache: dict[str, list[int]] = {}
 
+        # Building the pattern escapes and joins every special token, which with many of
+        # them costs far more than encoding a short text; so it is done once per subset.
+        all_special = frozenset(self._special_tokens)
+        self._all_special: _SpecialSplit = (all_special, special_token_pattern(all_special))
+        self._special_cache: dict[frozenset[str], _SpecialSplit] = {}
+
     @classmethod
     def from_ranks(cls, ranks: dict[bytes, int], special_tokens: dict[str, int]) -> Self:
         """Build from tiktoken-style mergeable ranks (token bytes -> id)."""
@@ -112,9 +125,9 @@ class Tokenizer:
     ) -> list[int]:
         """Encode ``text``; special tokens outside ``allowed_special`` are plain text."""
         if allowed_special == "all":
-            allowed = set(self._special_tokens)
+            allowed, pattern = self._all_special
         elif isinstance(allowed_special, AbstractSet):
-            allowed = self._special_tokens.keys() & allowed_special
+            allowed, pattern = self._special_split(allowed_special)
         else:
             # Like tiktoken: any other string (or a list) is an error, not "all".
             raise TypeError(
@@ -122,13 +135,30 @@ class Tokenizer:
             )
 
         ids: list[int] = []
-        for chunk in split_on_special_tokens(text, allowed):
+        for chunk in pattern.split(text) if pattern is not None else [text]:
+            if not chunk:
+                continue
             if chunk in allowed:
                 ids.append(self._special_tokens[chunk])
                 continue
             for piece in pretokenize(chunk):
                 ids.extend(self._encode_piece(piece))
         return ids
+
+    def _special_split(self, allowed_special: AbstractSet[str]) -> _SpecialSplit:
+        # The caller may change its set between calls, so the key is rebuilt every time:
+        # O(min(len(allowed_special), number of special tokens)) for a set or frozenset,
+        # which frozenset.intersection iterates from the smaller side. Unknown strings
+        # drop out, so subsets that differ only in those share an entry.
+        allowed = self._all_special[0].intersection(allowed_special)
+        split = self._special_cache.get(allowed)
+        if split is None:
+            split = (allowed, special_token_pattern(allowed))
+            if len(self._special_cache) >= SPECIAL_CACHE_SIZE:
+                # Drop the oldest entry; pop, not del: another thread may drop it first.
+                self._special_cache.pop(next(iter(self._special_cache)), None)
+            self._special_cache[allowed] = split
+        return split
 
     def _encode_piece(self, piece: str) -> list[int]:
         ids = self._cache.get(piece)

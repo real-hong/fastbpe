@@ -118,20 +118,31 @@ def pretokenize(text: str) -> list[str]:
     return pieces
 
 
-def split_on_special_tokens(text: str, special_tokens: Iterable[str]) -> list[str]:
-    """Split ``text`` around special tokens, keeping each one as its own chunk.
+def special_token_pattern(special_tokens: Iterable[str]) -> re.Pattern[str] | None:
+    """Compile the pattern that splits text around ``special_tokens``, or ``None``.
 
-    Where special tokens overlap, the longest one wins. Empty chunks are dropped.
-    Raises ``ValueError`` for an empty special token, which would match between every
-    pair of characters.
+    The pattern captures the tokens, so ``split`` keeps each one as its own chunk, and
+    tries longer tokens first, so where tokens overlap the longest one wins. Raises
+    ``ValueError`` for an empty special token, which would match between every pair of
+    characters.
     """
     tokens = sorted(special_tokens, key=len, reverse=True)
     if tokens and not tokens[-1]:
         raise ValueError("special tokens must not be empty")
     if not tokens:
+        return None
+    return re.compile("(" + "|".join(re.escape(token) for token in tokens) + ")")
+
+
+def split_on_special_tokens(text: str, special_tokens: Iterable[str]) -> list[str]:
+    """Split ``text`` around special tokens, keeping each one as its own chunk.
+
+    See ``special_token_pattern``. Empty chunks are dropped.
+    """
+    pattern = special_token_pattern(special_tokens)
+    if pattern is None:
         return [text] if text else []
-    pattern = "(" + "|".join(re.escape(token) for token in tokens) + ")"
-    return [chunk for chunk in re.split(pattern, text) if chunk]
+    return [chunk for chunk in pattern.split(text) if chunk]
 
 
 def _count(texts: list[str]) -> Counter[bytes]:

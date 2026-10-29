@@ -1,8 +1,10 @@
 from collections.abc import Set as AbstractSet
 from pathlib import Path
+from typing import Literal
 
 import pytest
 
+import fastbpe.tokenizer as tokenizer_module
 from fastbpe import Tokenizer
 
 EOT = "<|endoftext|>"
@@ -138,3 +140,96 @@ def test_save_load_accepts_str_path(small_tokenizer: Tokenizer, tmp_path: Path) 
 def test_from_ranks_gpt2(gpt2_tokenizer: Tokenizer) -> None:
     assert gpt2_tokenizer.vocab_size == 50257
     assert gpt2_tokenizer.special_tokens == {EOT: 50256}
+
+
+# Special-token patterns are compiled once per allowed subset and cached; none of that
+# may change what encode returns.
+SPECIALS = [EOT, "<|a|>", "<|b|>", "<|a|><|b|>"]
+MIXED = f"x<|a|>y<|b|> z<|a|><|b|>{EOT}w"
+SUBSETS: list[Literal["all"] | AbstractSet[str]] = [
+    "all",
+    set(),
+    {"<|a|>"},
+    {"<|b|>"},
+    {"<|a|>", "<|b|>"},
+    {"<|a|><|b|>", EOT},
+    {"<|a|>", "not a special token"},
+]
+
+
+@pytest.fixture(scope="module")
+def specials_tokenizer(small_corpus: str) -> Tokenizer:
+    return Tokenizer.train(small_corpus, vocab_size=300, special_tokens=SPECIALS)
+
+
+def fresh(tokenizer: Tokenizer) -> Tokenizer:
+    return Tokenizer(tokenizer.vocab, tokenizer.merges, tokenizer.special_tokens)
+
+
+@pytest.mark.parametrize("allowed", SUBSETS)
+def test_repeated_encodes_agree(
+    specials_tokenizer: Tokenizer, allowed: Literal["all"] | AbstractSet[str]
+) -> None:
+    tok = fresh(specials_tokenizer)
+    first = tok.encode(MIXED, allowed_special=allowed)
+    for _ in range(3):
+        assert tok.encode(MIXED, allowed_special=allowed) == first
+
+
+def test_allowed_subsets_do_not_interfere(specials_tokenizer: Tokenizer) -> None:
+    # Each subset on a tokenizer that has seen all the others, in two orders, agrees
+    # with a tokenizer that has seen none.
+    expected = [fresh(specials_tokenizer).encode(MIXED, allowed_special=a) for a in SUBSETS]
+    tok = fresh(specials_tokenizer)
+    for order in (range(len(SUBSETS)), reversed(range(len(SUBSETS)))):
+        for i in order:
+            assert tok.encode(MIXED, allowed_special=SUBSETS[i]) == expected[i]
+
+
+def test_allowed_subset_ids(specials_tokenizer: Tokenizer) -> None:
+    ids = specials_tokenizer.special_tokens
+    tok = fresh(specials_tokenizer)
+    assert tok.encode("<|a|><|b|>", allowed_special={"<|a|>", "<|b|>"}) == [
+        ids["<|a|>"],
+        ids["<|b|>"],
+    ]
+    assert tok.encode("<|a|><|b|>") == [ids["<|a|><|b|>"]]
+    plain = tok.encode("<|a|><|b|>", allowed_special={EOT})
+    assert not set(plain) & set(ids.values())
+    assert tok.decode(plain) == "<|a|><|b|>"
+
+
+def test_unknown_strings_in_allowed_special_are_ignored(specials_tokenizer: Tokenizer) -> None:
+    tok = fresh(specials_tokenizer)
+    assert tok.encode(MIXED, allowed_special={"<|a|>", "<|zzz|>"}) == tok.encode(
+        MIXED, allowed_special={"<|a|>"}
+    )
+
+
+def test_changes_to_the_callers_set_are_seen(specials_tokenizer: Tokenizer) -> None:
+    tok = fresh(specials_tokenizer)
+    allowed = {"<|a|>"}
+    only_a = tok.encode(MIXED, allowed_special=allowed)
+    allowed.add("<|b|>")
+    assert tok.encode(MIXED, allowed_special=allowed) == fresh(tok).encode(
+        MIXED, allowed_special={"<|a|>", "<|b|>"}
+    )
+    allowed.clear()
+    assert tok.encode(MIXED, allowed_special=allowed) == fresh(tok).encode(
+        MIXED, allowed_special=set()
+    )
+    assert tok.encode(MIXED, allowed_special={"<|a|>"}) == only_a
+
+
+def test_special_pattern_cache_is_bounded(small_corpus: str) -> None:
+    size = tokenizer_module.SPECIAL_CACHE_SIZE
+    specials = [f"<|s{i}|>" for i in range(size + 5)]
+    tok = Tokenizer.train(small_corpus, vocab_size=300, special_tokens=specials)
+    text = "".join(specials)
+    for special in specials:
+        ids = tok.encode(text, allowed_special={special})
+        assert ids.count(tok.special_tokens[special]) == 1
+        assert len(tok._special_cache) <= size
+    # The first subset was evicted long ago and is compiled again, still correctly.
+    first = specials[0]
+    assert tok.encode(first, allowed_special={first}) == [tok.special_tokens[first]]
