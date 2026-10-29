@@ -20,6 +20,7 @@ build-backend = "uv_build"
 dev = [
     "hypothesis>=6.170.13",
     "mypy>=2.4.0",
+    "pre-commit>=4.7.0",
     # pytest-benchmark 5.3.0 reads node._nodeid, which pytest 9.2 removed.
     "pytest>=9.1,<9.2",
     "pytest-benchmark>=5.3.0",

@@ -88,6 +88,21 @@
   spawn loses at most ~30 ms on tiny inputs; a size threshold would instead make the
   `__main__`-guard requirement appear only once inputs grow.
 
+### Development
+
+- Commit dcfc7d6 (on master, merged in PR #4) fails one test:
+  `tests/test_vocab_invariants.py::test_special_tokens_sharing_bytes_with_regular_tokens_follow_tiktoken`
+  fails on overlapping special tokens (`["ab", "a"]`) under both hypothesis profiles.
+  The library code is the same as in the next commit, 1e11470, which only fixes the
+  test (and TODO.md); every other test passes at dcfc7d6. History is left as is;
+  bisecting across it should skip that test.
+- A pre-push hook runs the fast test suite (`.pre-commit-config.yaml`; install with
+  `uv run pre-commit install`), and CLAUDE.md forbids piping the output of
+  pass/fail commands without `set -o pipefail`.
+- Corrected: TODO.md and a test comment from PR #4 said tiktoken's choice among
+  overlapping special tokens depends on their ids. It depends only on the token
+  strings (README, "Known differences from tiktoken").
+
 ### Fixes
 
 - `encode(allowed_special=...)` accepts only `"all"` or a set; any other value

@@ -83,9 +83,9 @@ when full collections run.
 
 When one special token is a prefix of another, both match at one position. This
 tokenizer takes the longest (`test_overlapping_special_tokens_use_longest_match`);
-tiktoken takes whichever its Rust hash map lists first, so the result depends on the
-tokens and their ids (byte vocab: `{"xy": 256, "xyz": 257}` gives `[257]` on "xyz",
-`{"xyz": 256, "xy": 257}` gives `[256]`; `"a"`/`"ab"` gives `a` either way). The
+tiktoken 0.14.0 takes whichever its Rust hash map lists first. That depends only on
+the token strings, not on their ids or order (`"xy"`/`"xyz"`, `"q"`/`"qq"`: longest;
+`"a"`/`"ab"`, `"<|a|>"`/`"<|a|><|b|>"`: shortest), so it follows no rule. The
 tiktoken comparisons in `tests/test_vocab_invariants.py` skip such sets. No action
 needed unless exact tiktoken parity is wanted there, which would mean copying an
 order that is arbitrary.
