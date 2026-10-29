@@ -33,6 +33,14 @@
 - The fast path is valid only for the GPT-2 pattern: the map erases case, which
   letter or digit, and newline vs. other whitespace. Other patterns are rejected.
 
+### Encoding
+
+- `bpe_parts` builds its initial heap with one `heapify` and inlines the re-pushes
+  after each merge. Cold encode of 1 MB: regular 1.07x, cjk 1.16x, base64 1.12x,
+  minified 1.12x, unicode_all 1.18x, one 160 kB DNA piece 1.04x; warm encode is
+  unchanged except where the cache is too small to stay warm. Short-piece scan paths,
+  C-level iterator chains and local bindings were measured and not kept (TODO.md).
+
 ### Parallel pre-tokenization
 
 - Parallel pre-tokenization is **opt-in**: `train_bpe`, `Tokenizer.train` and
