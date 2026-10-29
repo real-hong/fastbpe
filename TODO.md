@@ -135,7 +135,7 @@ input it removes none while adding a second hash per piece. A large share is not
 large saving. Before an optimization, estimate the part it can actually remove, on the
 adversarial inputs too, not the share of the step it touches.
 
-## Encode cache: clearing everything at `CACHE_SIZE` is a cliff
+## Done: encode cache, keep emptying it; `cache_size` argument (2026-10-29)
 
 `Tokenizer._encode_piece` clears the whole cache once it holds `CACHE_SIZE` (100k)
 pieces. On low-repetition input whose distinct pieces exceed that, the cache is emptied
@@ -145,6 +145,45 @@ again and again and a "warm" encode is as slow as a cold one. 1 MB of base64 has
 503 ms / warm 495 ms) and unicode_all (135,180 distinct, 356 / 354 ms).
 Options to compare by measurement: evicting part of the cache (e.g. the oldest half of
 the insertion-ordered dict) or evicting by access order (LRU).
+
+Outcome: emptying stays; `cache_size` (default 100k, 0 = off) lets callers size the
+cache. The warm "cliff" on 1 MB inputs is a cyclic scan (the same text again), the worst
+case for LRU and FIFO and the best for whatever keeps the most entries; it says little
+about a long-running encoder. Raising the default to 2^17 was rejected: it only fits
+the three 1 MB inputs (103-135k distinct), helps nothing at 4 MB, and costs ~10 MB more
+per tokenizer and process.
+
+Simulated hit rates (`scripts/measure_cache.py`, capacity 100k), second pass of the same
+1 MB text / 4 MB stream, corpus pieces:
+
+| policy | base64 | low_rep | unicode_all | stream |
+|---|---|---|---|---|
+| empty when full | 67% | 23% | 6% | 95.2% |
+| evict oldest half | 67% | 23% | 7% | 95.4% |
+| keep every other | 83% | 55% | 33% | 95.8% |
+| LRU | 68% | 26% | 9% | 96.7% |
+| stop inserting (reference) | 99% | 88% | 75% | 97.1% |
+
+Keeping every other entry ("thin", the only one that helped the 1 MB inputs) was timed
+against emptying with `scripts/time_variants.py`, 7 processes each, min ms,
+ratio = empty / thin:
+
+| case | empty | thin | |
+|---|---|---|---|
+| stream pass 1 | 802.7 | 848.2 | 0.95x |
+| stream pass 2 | 791.7 | 846.5 | 0.94x |
+| stream pass 2, corpus docs | 150.1 | 167.2 | 0.90x |
+| base64 warm | 291.3 | 211.8 | 1.38x |
+| low_rep warm | 356.0 | 248.8 | 1.43x |
+| unicode_all cold / warm | 269.9 / 232.5 | 292.0 / 217.9 | 0.92x / 1.07x |
+| regular warm | 53.5 | 53.4 | 1.00x |
+| regular next to a thinned tokenizer, warm | 54.7 | 54.9 | 1.00x |
+
+Rejected: slower on the stream, the case that matters, for ~0.5 points of hit rate.
+Where the cost comes from (a lock on every insert, copying half the dict on each thin,
+the thinned cache's own locality) was not broken down. Cold, thin was slower where it
+evicts (base64 0.95x, low_rep 0.96x); the other 1 MB inputs were 0.97-1.00x cold and
+1.00-1.01x warm.
 
 ### Measuring in one process misleads (2026-10-29)
 

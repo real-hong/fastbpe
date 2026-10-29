@@ -23,8 +23,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # pyproject: requires-python = ">=3.12"
-        python-version: ["3.12", "3.13", "3.14"]
+        # pyproject: requires-python = ">=3.12". "3.14t" is the free-threaded build
+        # (uv's short-variant syntax), so the thread tests in tests/test_cache.py run
+        # without the GIL; test_free_threaded_build_runs_without_the_gil checks that.
+        python-version: ["3.12", "3.13", "3.14", "3.14t"]
     env:
       HYPOTHESIS_PROFILE: ci
       # Fail instead of skipping the tiktoken oracle tests when its data is missing.

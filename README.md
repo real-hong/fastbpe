@@ -4,6 +4,17 @@ A byte-level BPE tokenizer (training, encoding, decoding) in pure Python, standa
 library only. With the same merges, encoding matches tiktoken; `tests/test_oracle.py`
 checks this against tiktoken's `gpt2` encoding.
 
+## Encode cache
+
+Each `Tokenizer` caches the ids of the pre-tokenized pieces it has encoded, up to
+`cache_size` pieces (default 100,000; also accepted by `train`, `from_ranks` and
+`load`). An entry takes about 150-220 bytes, so the default cache holds at most
+~15-22 MB per tokenizer, and each process using a tokenizer has its own. When the
+cache is full it is emptied. A larger cache pays off for text with many distinct
+pieces (code, base64, many scripts) that is encoded again; on input with far more
+distinct pieces than the cache holds it gains little. `cache_size=0` disables the
+cache. A tokenizer may be shared between threads, including on free-threaded Python.
+
 ## Known differences from tiktoken
 
 - **Special tokens that are prefixes of one another.** If one special token is a
