@@ -23,6 +23,7 @@ from adversarial_inputs import INPUTS, many_specials
 from corpus import SEPARATOR
 from pytest_benchmark.fixture import BenchmarkFixture
 
+import fastbpe.pretokenize as pretokenize_module
 from fastbpe import Tokenizer
 from fastbpe.pretokenize import count_pretokens, pretokenize, split_on_special_tokens
 
@@ -59,7 +60,10 @@ def fresh_tokenizer(gpt2: Tokenizer, specials: list[str]) -> Tokenizer:
 
 
 def cold_table() -> None:
-    """Empty the pre-tokenizer's character table. There is none before finding #7."""
+    """Empty the pre-tokenizer's lazily filled character table (none before finding #7)."""
+    table = getattr(pretokenize_module, "_TABLE", None)
+    if table is not None:
+        table.clear()
 
 
 @pytest.mark.parametrize("name", CASES)
