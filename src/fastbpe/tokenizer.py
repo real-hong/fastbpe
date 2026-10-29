@@ -166,6 +166,10 @@ class Tokenizer:
                 f'allowed_special must be "all" or a set of strings, got {allowed_special!r}'
             )
 
+        # Cache hits are looked up here rather than through a method call per piece: warm
+        # encode of the 1 MB corpus 1.08x (TODO.md). A full cache is emptied in place and
+        # never replaced, so the bound get stays the cache's, also across threads.
+        get = self._cache.get
         ids: list[int] = []
         for chunk in pattern.split(text) if pattern is not None else [text]:
             if not chunk:
@@ -174,7 +178,8 @@ class Tokenizer:
                 ids.append(self._special_tokens[chunk])
                 continue
             for piece in pretokenize(chunk):
-                ids.extend(self._encode_piece(piece))
+                hit = get(piece)
+                ids.extend(hit if hit is not None else self._encode_miss(piece))
         return ids
 
     def _compile_all_split(self) -> _SpecialSplit:
@@ -199,22 +204,21 @@ class Tokenizer:
             self._special_cache[allowed] = split
         return split
 
-    def _encode_piece(self, piece: str) -> list[int]:
-        ids = self._cache.get(piece)
-        if ids is None:
-            data = piece.encode()
-            # A piece that is itself a token is that token, without running BPE, as in
-            # tiktoken (the oracle). For GPT-2 ranks and trained vocabularies BPE ends
-            # there anyway (tests/test_whole_token.py), so this only skips the work; for
-            # a vocabulary holding a token no merge reaches, it decides the result.
-            token_id = self._ranks.get(data)
-            ids = [token_id] if token_id is not None else encode_bytes(data, self._ranks)
-            if self._cache_size:
-                # Without a lock: threads may each insert after another's check, so the
-                # cache can exceed its size by one entry per thread, never more.
-                if len(self._cache) >= self._cache_size:
-                    self._cache.clear()
-                self._cache[piece] = ids
+    def _encode_miss(self, piece: str) -> list[int]:
+        """Encode a piece that ``encode`` did not find in the cache, and cache it."""
+        data = piece.encode()
+        # A piece that is itself a token is that token, without running BPE, as in
+        # tiktoken (the oracle). For GPT-2 ranks and trained vocabularies BPE ends there
+        # anyway (tests/test_whole_token.py), so this only skips the work; for a
+        # vocabulary holding a token no merge reaches, it decides the result.
+        token_id = self._ranks.get(data)
+        ids = [token_id] if token_id is not None else encode_bytes(data, self._ranks)
+        if self._cache_size:
+            # Without a lock: threads may each insert after another's check, so the cache
+            # can exceed its size by one entry per thread, never more.
+            if len(self._cache) >= self._cache_size:
+                self._cache.clear()
+            self._cache[piece] = ids
         return ids
 
     def decode(self, ids: Iterable[int]) -> str:

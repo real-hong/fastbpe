@@ -247,13 +247,40 @@ process before, hold when measured one process per measurement (numbers in their
 sections above). Noise on this machine, from the `master_copy` control: 0.99-1.01x
 with GC off, up to 1.03x on one input with GC on.
 
-## Next: inline the cache lookup in `encode`
+## Done: inline the cache lookup in `encode` (2026-10-29)
 
-Every piece costs a Python method call to `_encode_piece` even on a hit. A per-instance
-`functools.lru_cache` (a C call) made warm regular encode 1.04-1.05x faster despite its
-LRU bookkeeping, which points at that call (measured in one process with one other
-variant, so subject to the caveat above). Measure `cache.get(piece)` inline in the
-`encode` loop, calling `_encode_piece` only on a miss, with `scripts/time_variants.py`.
+Every piece cost a Python method call to `_encode_piece` even on a hit. `encode` now
+binds the cache's `get` once per call and calls `_encode_miss` only on a miss (which
+looks the cache up no second time). Safe because a full cache is emptied in place,
+never replaced (`test_full_cache_is_emptied_in_place`).
+
+`scripts/time_variants.py`, 7 processes per (input, variant), GC off, two runs:
+
+- Before the change, variant `inline` vs `master_copy`: regular warm 1.087x
+  [median 1.084x]. That run was noisy: `master_copy` vs `clear` 0.987-1.015 (medians
+  0.981-1.014), per-variant spread up to 27-42% on cjk. Cause not found.
+- After the change, `clear` and `master_copy` (new master) vs `pre_inline` (the code
+  before), machine idle (load at most 1.00 on 32 cores, sampled every 5 s; CPU
+  frequency governor powersave, EPP `power`): `master_copy` vs `clear` 0.986-1.006
+  (medians 0.984-1.013), spreads 1-4% except high_rep warm 8% and dna warm (3.8 ms) 7%.
+
+New vs old, second run (min [median]):
+
+| input | cold | warm |
+|---|---|---|
+| regular | 1.05x [1.05x] | 1.08x [1.09x] |
+| regular next to a tokenizer that encoded unicode_all | 1.05x [1.05x] | 1.09x [1.08x] |
+| high_rep | 1.10x [1.10x] | 1.11x [1.10x] |
+| minified | 1.01x | 1.09x [1.08x] |
+| emoji | 1.01x | 1.04x [1.04x] |
+| specials | 1.02x | 1.04x [1.03x] |
+| cjk | 1.00x | 1.03x [1.03x] |
+| stream corpus documents, pass 1 / 2 | 1.05x / 1.05x | |
+| base64, whitespace, low_rep, unicode_all, dna, stream filler | 1.00-1.01x | 1.00-1.01x |
+
+The gain is on cache hits; where nearly every piece misses, it is within the noise.
+A per-instance `functools.lru_cache` (a C call) had pointed at the method call
+(1.04-1.05x, one process); it was not pursued further.
 
 ## Release preparation (not started)
 

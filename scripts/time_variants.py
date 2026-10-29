@@ -33,7 +33,9 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from collections.abc import Set as AbstractSet
 from itertools import islice
+from typing import Literal
 
 import tiktoken
 from adversarial_inputs import INPUTS, many_specials, stream
@@ -41,6 +43,7 @@ from adversarial_inputs import INPUTS, many_specials, stream
 import fastbpe.tokenizer as tokenizer_module
 from fastbpe import Tokenizer
 from fastbpe.encode import encode_bytes
+from fastbpe.pretokenize import pretokenize
 
 MB = 1_000_000
 WARM = 3
@@ -48,11 +51,52 @@ GC_ON_ENV = "TIME_VARIANTS_GC"
 INPUT_NAMES = [*INPUTS, "specials", "stream", "regular_after_unicode_all"]
 
 
-class ThinTokenizer(Tokenizer):
+class PreInlineTokenizer(Tokenizer):
+    """Master before ``encode`` looked cache hits up itself: a method call per piece."""
+
+    def encode(
+        self, text: str, *, allowed_special: Literal["all"] | AbstractSet[str] = "all"
+    ) -> list[int]:
+        if allowed_special == "all":
+            allowed, pattern = self._all_split or self._compile_all_split()
+        elif isinstance(allowed_special, AbstractSet):
+            allowed, pattern = self._special_split(allowed_special)
+        else:
+            raise TypeError(
+                f'allowed_special must be "all" or a set of strings, got {allowed_special!r}'
+            )
+
+        ids: list[int] = []
+        for chunk in pattern.split(text) if pattern is not None else [text]:
+            if not chunk:
+                continue
+            if chunk in allowed:
+                ids.append(self._special_tokens[chunk])
+                continue
+            for piece in pretokenize(chunk):
+                ids.extend(self._encode_piece(piece))
+        return ids
+
+    def _encode_piece(self, piece: str) -> list[int]:
+        ids = self._cache.get(piece)
+        if ids is None:
+            data = piece.encode()
+            token_id = self._ranks.get(data)
+            ids = [token_id] if token_id is not None else encode_bytes(data, self._ranks)
+            if self._cache_size:
+                if len(self._cache) >= self._cache_size:
+                    self._cache.clear()
+                self._cache[piece] = ids
+        return ids
+
+
+class ThinTokenizer(PreInlineTokenizer):
     """Thinning instead of clearing: a full cache is replaced by every other entry.
 
     Inserting and replacing hold one lock, so a thread that inserts while another
     replaces the dict cannot lose its entry into the dropped one; lookups take no lock.
+    Built on ``PreInlineTokenizer``, the code it was measured against: master's
+    ``encode`` binds the cache's ``get`` once per call, so it cannot replace the dict.
     """
 
     def __init__(
@@ -78,23 +122,47 @@ class ThinTokenizer(Tokenizer):
 
 
 class MasterCopyTokenizer(Tokenizer):
-    """Control: ``Tokenizer._encode_piece`` copied unchanged into this script.
+    """Control: ``Tokenizer.encode`` and ``_encode_miss`` copied unchanged.
 
     The other subclasses differ from master only in what they change, so they are
     compared against this one; its ratio to ``clear`` shows what being a subclass
-    defined in a script costs by itself, and its spread is the noise.
+    defined in a script costs by itself, and its spread is the noise. Keep it in step
+    with master: a variant overriding a method master no longer calls measures nothing.
     """
 
-    def _encode_piece(self, piece: str) -> list[int]:
-        ids = self._cache.get(piece)
-        if ids is None:
-            data = piece.encode()
-            token_id = self._ranks.get(data)
-            ids = [token_id] if token_id is not None else encode_bytes(data, self._ranks)
-            if self._cache_size:
-                if len(self._cache) >= self._cache_size:
-                    self._cache.clear()
-                self._cache[piece] = ids
+    def encode(
+        self, text: str, *, allowed_special: Literal["all"] | AbstractSet[str] = "all"
+    ) -> list[int]:
+        if allowed_special == "all":
+            allowed, pattern = self._all_split or self._compile_all_split()
+        elif isinstance(allowed_special, AbstractSet):
+            allowed, pattern = self._special_split(allowed_special)
+        else:
+            raise TypeError(
+                f'allowed_special must be "all" or a set of strings, got {allowed_special!r}'
+            )
+
+        get = self._cache.get
+        ids: list[int] = []
+        for chunk in pattern.split(text) if pattern is not None else [text]:
+            if not chunk:
+                continue
+            if chunk in allowed:
+                ids.append(self._special_tokens[chunk])
+                continue
+            for piece in pretokenize(chunk):
+                hit = get(piece)
+                ids.extend(hit if hit is not None else self._encode_miss(piece))
+        return ids
+
+    def _encode_miss(self, piece: str) -> list[int]:
+        data = piece.encode()
+        token_id = self._ranks.get(data)
+        ids = [token_id] if token_id is not None else encode_bytes(data, self._ranks)
+        if self._cache_size:
+            if len(self._cache) >= self._cache_size:
+                self._cache.clear()
+            self._cache[piece] = ids
         return ids
 
 
@@ -181,32 +249,28 @@ def encode_bytes_heapify(piece: bytes, ranks: dict[bytes, int]) -> list[int]:
 class BpePreTokenizer(MasterCopyTokenizer):
     """Master with ``bpe_parts`` as before 880d05f and a5b2521 (finding #8)."""
 
-    def _encode_piece(self, piece: str) -> list[int]:
-        ids = self._cache.get(piece)
-        if ids is None:
-            data = piece.encode()
-            token_id = self._ranks.get(data)
-            ids = [token_id] if token_id is not None else encode_bytes_pre(data, self._ranks)
-            if self._cache_size:
-                if len(self._cache) >= self._cache_size:
-                    self._cache.clear()
-                self._cache[piece] = ids
+    def _encode_miss(self, piece: str) -> list[int]:
+        data = piece.encode()
+        token_id = self._ranks.get(data)
+        ids = [token_id] if token_id is not None else encode_bytes_pre(data, self._ranks)
+        if self._cache_size:
+            if len(self._cache) >= self._cache_size:
+                self._cache.clear()
+            self._cache[piece] = ids
         return ids
 
 
 class BpeHeapifyTokenizer(MasterCopyTokenizer):
     """Master with ``bpe_parts`` as at 880d05f, before a5b2521 inlined the re-pushes."""
 
-    def _encode_piece(self, piece: str) -> list[int]:
-        ids = self._cache.get(piece)
-        if ids is None:
-            data = piece.encode()
-            token_id = self._ranks.get(data)
-            ids = [token_id] if token_id is not None else encode_bytes_heapify(data, self._ranks)
-            if self._cache_size:
-                if len(self._cache) >= self._cache_size:
-                    self._cache.clear()
-                self._cache[piece] = ids
+    def _encode_miss(self, piece: str) -> list[int]:
+        data = piece.encode()
+        token_id = self._ranks.get(data)
+        ids = [token_id] if token_id is not None else encode_bytes_heapify(data, self._ranks)
+        if self._cache_size:
+            if len(self._cache) >= self._cache_size:
+                self._cache.clear()
+            self._cache[piece] = ids
         return ids
 
 
@@ -216,14 +280,12 @@ class NoWholeTokenizer(MasterCopyTokenizer):
     Same output for GPT-2 ranks (tests/test_whole_token.py); checked per run.
     """
 
-    def _encode_piece(self, piece: str) -> list[int]:
-        ids = self._cache.get(piece)
-        if ids is None:
-            ids = encode_bytes(piece.encode(), self._ranks)
-            if self._cache_size:
-                if len(self._cache) >= self._cache_size:
-                    self._cache.clear()
-                self._cache[piece] = ids
+    def _encode_miss(self, piece: str) -> list[int]:
+        ids = encode_bytes(piece.encode(), self._ranks)
+        if self._cache_size:
+            if len(self._cache) >= self._cache_size:
+                self._cache.clear()
+            self._cache[piece] = ids
         return ids
 
 
@@ -231,6 +293,7 @@ VARIANTS: dict[str, type[Tokenizer]] = {
     "clear": Tokenizer,
     "thin": ThinTokenizer,
     "master_copy": MasterCopyTokenizer,
+    "pre_inline": PreInlineTokenizer,
     "bpe_pre": BpePreTokenizer,
     "bpe_heapify": BpeHeapifyTokenizer,
     "no_whole": NoWholeTokenizer,
