@@ -6,12 +6,13 @@ every word from the same merge, so no later merge can build its bytes again (see
 single-byte special token has the bytes of a base token, and both ids stay valid.
 """
 
+import unicodedata
 import warnings
 
 import pytest
 import tiktoken
 from bpe_strategies import overlapping_words, piece_counts
-from hypothesis import given
+from hypothesis import assume, given
 from hypothesis import strategies as st
 from strategies import texts
 
@@ -81,6 +82,13 @@ def test_special_tokens_sharing_bytes_with_regular_tokens_follow_tiktoken(
     gpt2: tiktoken.Encoding, case: tuple[str, list[str]], merges: int
 ) -> None:
     text, specials = case
+    # Where one special token is a prefix of another, both match at one position.
+    # tiktoken then takes whichever comes first in its hash map (for "xy"/"xyz" it
+    # depends on their ids), so it is no oracle there; this tokenizer takes the longest.
+    assume(not any(a != b and b.startswith(a) for a in specials for b in specials))
+    # As in test_oracle.py: code points this Python's Unicode database does not know
+    # may be letters to tiktoken's newer one.
+    assume(all(unicodedata.category(c) != "Cn" for c in text))
     tokenizer = train_quietly(text, 256 + merges + len(specials), specials)
     special_ids = tokenizer.special_tokens
     ranks = {
