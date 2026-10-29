@@ -41,6 +41,15 @@
   unchanged except where the cache is too small to stay warm. Short-piece scan paths,
   C-level iterator chains and local bindings were measured and not kept (TODO.md).
 
+- A pre-tokenized piece whose bytes are a token encodes to that token without running
+  BPE, as tiktoken does. This is tiktoken's semantics, not only a shortcut: with a
+  vocabulary holding a token that no merge reaches (e.g. `b"abc"` without `ab`/`bc`),
+  `encode("abc")` now gives that token instead of three bytes. For GPT-2 ranks and for
+  trained vocabularies the output is unchanged (BPE on a token's bytes ends in that
+  token; `tests/test_whole_token.py`). Cold encode of 1 MB: regular 1.17x, 50 special
+  tokens 1.11x; low-repetition inputs with few whole-token pieces pay one extra lookup
+  per distinct piece (unicode_all 0.98x, low_rep 0.99x with GC off).
+
 ### Parallel pre-tokenization
 
 - Parallel pre-tokenization is **opt-in**: `train_bpe`, `Tokenizer.train` and

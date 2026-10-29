@@ -124,7 +124,11 @@ class Tokenizer:
     def encode(
         self, text: str, *, allowed_special: Literal["all"] | AbstractSet[str] = "all"
     ) -> list[int]:
-        """Encode ``text``; special tokens outside ``allowed_special`` are plain text."""
+        """Encode ``text``; special tokens outside ``allowed_special`` are plain text.
+
+        Like tiktoken, a pre-tokenized piece whose bytes are a token encodes to that
+        token directly; other pieces are split by rank-based BPE.
+        """
         if allowed_special == "all":
             allowed, pattern = self._all_split or self._compile_all_split()
         elif isinstance(allowed_special, AbstractSet):
@@ -171,7 +175,13 @@ class Tokenizer:
     def _encode_piece(self, piece: str) -> list[int]:
         ids = self._cache.get(piece)
         if ids is None:
-            ids = encode_bytes(piece.encode(), self._ranks)
+            data = piece.encode()
+            # A piece that is itself a token is that token, without running BPE, as in
+            # tiktoken (the oracle). For GPT-2 ranks and trained vocabularies BPE ends
+            # there anyway (tests/test_whole_token.py), so this only skips the work; for
+            # a vocabulary holding a token no merge reaches, it decides the result.
+            token_id = self._ranks.get(data)
+            ids = [token_id] if token_id is not None else encode_bytes(data, self._ranks)
             if len(self._cache) >= CACHE_SIZE:
                 self._cache.clear()
             self._cache[piece] = ids

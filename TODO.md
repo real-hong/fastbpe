@@ -70,13 +70,14 @@ Rejected, measured on `bpe_parts` over the same pieces:
   collecting parts with a comprehension, returning early when no pair is ranked:
   each 0.93-1.01x.
 
-Open, needs a decision: tiktoken returns a piece that is itself a token without running
-BPE. In `Tokenizer._encode_piece` that makes `bpe_parts` 1.64x faster on regular (47%
-of its distinct pieces are single tokens; this is most of the review's ~2x) and does
-nothing on the adversarial inputs (0-10%). It must not go into `bpe_parts`: for
-arbitrary ranks it is not BPE (`test_matches_reference_bpe`, `_recover_merges`). It
-is only exact if BPE on every token's own bytes ends in that token; true for
-`from_ranks` (checked by `_recover_merges`), not yet shown for trained vocabularies.
+Done afterwards: a piece that is itself a token is looked up first, as tiktoken does
+(`Tokenizer._encode_piece`, not `bpe_parts`). Checked before implementing: every GPT-2
+token that is a whole piece encodes like tiktoken, and hypothesis plus ~5.9M tokens of
+~14k random trained vocabularies found no token whose own bytes BPE to anything else
+(no trained vocabulary had two tokens with the same bytes either). Cold encode,
+interleaved, best of 7, GC off: regular 1.18x, unicode_all 0.98x, low_rep 0.99x. With
+GC on, unicode_all varied 0.93-0.95x: the lookup itself is ~4 ms of it, the rest is
+when full collections run.
 
 ## Many short chunks: fixed cost per chunk in `count_pretokens`
 
