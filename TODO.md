@@ -8,17 +8,76 @@ compiled once, 25fdd06) are done. Measure each item below against the current ma
 `scripts/measure_share.py` and benchmarks on ~1 MB inputs, with an estimate of what each
 change could actually remove (see the lesson under the rejected item below):
 
-- **Cold encode is BPE on distinct pieces** (`bpe_parts`): cold minus warm is ~180 ms
-  of 210 ms on CJK, ~290 ms of 343 ms on base64 (warm there is cold, see the cache
-  item), 209 ms on one 160 kB DNA piece. Review finding #8 (`scripts/review/bpe_micro.py`:
-  local bindings, inlining `push`) measured ~2x on unique pieces, so roughly half of
-  that is removable. Largest removable time in encoding.
+- **Cold encode is BPE on distinct pieces** (`bpe_parts`): finding #8 is done, see
+  its section below; it gave 1.12-1.18x on adversarial cold encode, not the ~2x the
+  review measured. What is left is mostly per-byte slicing and dict lookups in Python.
 - **Training on adversarial input is the merges**: 87% (base64), 91% (minified), 98%
   (CJK, 1.1 s at vocab 1000), ~100% (DNA). Not profiled yet; nothing is known about
   what is removable. Profile CJK first.
 - **Many short chunks**: fixed cost per chunk, see its own item below.
 - Warm encode on the corpus is 68% `pretokenize` (38 of 55 ms); the rest is cache
   lookups and `list.extend`, little to remove.
+
+## Finding #8: `bpe_parts` (2026-10-29)
+
+`scripts/profile_bpe.py` on the distinct pieces of 1 MB inputs (GPT-2 ranks), before:
+
+| input | distinct | bpe_parts | setup | initial pairs | merge loop | collect parts |
+|---|---|---|---|---|---|---|
+| regular | 10,856 | 35 ms | 9% | 26% | 61% | 5% |
+| base64 | 103,599 | 221 ms | 14% | 39% | 32% | 15% |
+| minified | 19,896 | 158 ms | 4% | 25% | 67% | 4% |
+| cjk | 30,207 | 151 ms | 8% | 51% | 18% | 23% |
+
+base64: 91% of pieces under 16 bytes, 43% of initial pairs ranked, ~3 merges per piece.
+cjk: average ~30 bytes, only ~10% of initial pairs ranked, so the time is the n-1
+slices and lookups and collecting ~40 mostly single-byte parts, not the heap.
+regular/minified: about half the heap pops are stale.
+
+Kept (each its own commit with numbers): initial heap by one `heapify` (880d05f),
+inlined re-pushes (a5b2521). Cold `Tokenizer.encode`, pytest-benchmark min, ms:
+
+| input | cold before | cold after | | warm before | warm after | |
+|---|---|---|---|---|---|---|
+| regular | 94.1 | 87.6 | 1.07x | 54.2 | 55.3 | 0.98x |
+| high_rep | 54.1 | 53.8 | 1.01x | 53.0 | 52.3 | 1.02x |
+| specials | 188.9 | 178.4 | 1.06x | 116.0 | 116.4 | 1.00x |
+| minified | 208.2 | 186.4 | 1.12x | 39.5 | 39.0 | 1.01x |
+| base64 | 332.6 | 295.7 | 1.12x | 331.9 | 297.3 | 1.12x |
+| cjk | 202.3 | 173.7 | 1.16x | 27.2 | 27.6 | 0.99x |
+| dna (one 160 kB piece) | 2032.3 | 1959.4 | 1.04x | 2.7 | 2.7 | 0.98x |
+| low_rep | 407.1 | 363.5 | 1.12x | 406.9 | 363.7 | 1.12x |
+| unicode_all | 284.6 | 240.7 | 1.18x | 286.3 | 241.4 | 1.19x |
+| emoji | 74.3 | 66.3 | 1.12x | 24.9 | 25.2 | 0.99x |
+| whitespace | 263.9 | 230.0 | 1.15x | 23.9 | 23.8 | 1.01x |
+
+Warm changes only where the cache cliff makes warm cold (base64, low_rep,
+unicode_all); the other warm differences are noise (one cjk warm run read 31.9 ms).
+
+Rejected, measured on `bpe_parts` over the same pieces:
+
+- Linear-scan path for short pieces (tiktoken's `byte_pair_merge`: rank list,
+  `min()` + `index()`, `del` on merge): 1.05x on base64, 0.87x on cjk, and slower than
+  the heap from n ~ 64 (4x at 512 bytes). Short pieces have few merges, so the heap is
+  not what costs.
+- Moving per-byte work into C with iterator chains (`map(ranks.get,
+  map(piece.__getitem__, slices))`, `compress`, `map(bytes, zip(...))` for pairs or
+  parts): 10-40% slower. Slot-wrapper calls and iterator setup cost more than the
+  specialized `piece[i:i+2]` bytecode on pieces this short.
+- 65536-entry table of two-byte pair ranks: 1.01-1.06x and an extra argument on
+  `encode_bytes`.
+- Local bindings of `ranks.get`/`heappush`/`heappop`, reading `end_of[i]` once,
+  collecting parts with a comprehension, returning early when no pair is ranked:
+  each 0.93-1.01x.
+
+Done afterwards: a piece that is itself a token is looked up first, as tiktoken does
+(`Tokenizer._encode_piece`, not `bpe_parts`). Checked before implementing: every GPT-2
+token that is a whole piece encodes like tiktoken, and hypothesis plus ~5.9M tokens of
+~14k random trained vocabularies found no token whose own bytes BPE to anything else
+(no trained vocabulary had two tokens with the same bytes either). Cold encode,
+interleaved, best of 7, GC off: regular 1.18x, unicode_all 0.98x, low_rep 0.99x. With
+GC on, unicode_all varied 0.93-0.95x: the lookup itself is ~4 ms of it, the rest is
+when full collections run.
 
 ## Many short chunks: fixed cost per chunk in `count_pretokens`
 

@@ -16,16 +16,17 @@ def bpe_parts(piece: bytes, ranks: dict[bytes, int]) -> list[bytes]:
     n = len(piece)
     end_of = list(range(1, n + 1))
     start_before = list(range(-1, n - 1))
-    heap: list[tuple[int, int, int, int]] = []
+    # The initial pairs are known up front: one O(n) heapify instead of n pushes.
+    heap = [
+        (rank, i, i + 1, i + 2)
+        for i in range(n - 1)
+        if (rank := ranks.get(piece[i : i + 2])) is not None
+    ]
+    heapq.heapify(heap)
 
-    def push(start: int, mid: int, end: int) -> None:
-        rank = ranks.get(piece[start:end])
-        if rank is not None:
-            heapq.heappush(heap, (rank, start, mid, end))
-
-    for i in range(n - 1):
-        push(i, i + 1, i + 2)
-
+    # After a merge the new token pairs with its left and right neighbours. Both pushes
+    # are written out instead of calling a helper: the Python call per push made the
+    # whole function 7-11% slower on the distinct pieces of 1 MB inputs.
     while heap:
         _, start, mid, end = heapq.heappop(heap)
         if end_of[start] != mid or end_of[mid] != end:
@@ -33,10 +34,14 @@ def bpe_parts(piece: bytes, ranks: dict[bytes, int]) -> list[bytes]:
         end_of[start] = end
         end_of[mid] = -1
         if start > 0:
-            push(start_before[start], start, end)
+            left = start_before[start]
+            if (rank := ranks.get(piece[left:end])) is not None:
+                heapq.heappush(heap, (rank, left, start, end))
         if end < n:
             start_before[end] = start
-            push(start, end, end_of[end])
+            right = end_of[end]
+            if (rank := ranks.get(piece[start:right])) is not None:
+                heapq.heappush(heap, (rank, start, end, right))
 
     parts = []
     i = 0

@@ -1,3 +1,4 @@
+from bpe_strategies import overlapping_words
 from hypothesis import given
 from hypothesis import strategies as st
 from tiktoken._educational import bpe_encode
@@ -47,6 +48,21 @@ abc_tokens = st.lists(st.sampled_from(b"abc"), min_size=2, max_size=4).map(bytes
 
 @given(piece=abc_bytes, tokens=st.lists(abc_tokens, unique=True, max_size=30), data=st.data())
 def test_matches_reference_bpe(piece: bytes, tokens: list[bytes], data: st.DataObject) -> None:
+    order = data.draw(st.permutations(range(len(tokens))))
+    ranks = BYTE_RANKS | {token: 256 + rank for token, rank in zip(tokens, order, strict=True)}
+    assert encode_bytes(piece, ranks) == bpe_encode(ranks, piece, visualise=None)
+
+
+# Long runs and repeated motifs (up to ~180 bytes) put many equal-ranked and stale
+# candidates on the heap at once, which short random pieces rarely do.
+@given(
+    piece=overlapping_words(),
+    tokens=st.lists(abc_tokens, unique=True, max_size=30),
+    data=st.data(),
+)
+def test_matches_reference_bpe_on_long_overlapping_pieces(
+    piece: bytes, tokens: list[bytes], data: st.DataObject
+) -> None:
     order = data.draw(st.permutations(range(len(tokens))))
     ranks = BYTE_RANKS | {token: 256 + rank for token, rank in zip(tokens, order, strict=True)}
     assert encode_bytes(piece, ranks) == bpe_encode(ranks, piece, visualise=None)
